@@ -35,25 +35,157 @@ import okhttp3.Response;
 public class ApiHelper {
     private static final String TAG = "ApiHelper";
 
-    // ✅ MELHORADO: OkHttpClient com timeouts mais curtos para debug rápido
+    // ✅ CORRIGIDO: OkHttpClient com EventListener e interceptor robusto
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(8, TimeUnit.SECONDS)
             .writeTimeout(8, TimeUnit.SECONDS)
-            .callTimeout(15, TimeUnit.SECONDS)  // ✅ NOVO: Timeout total da chamada
+            .callTimeout(15, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            // ✅ NOVO: EventListener para monitorar todas as etapas da conexão
+            .eventListener(new okhttp3.EventListener() {
+                @Override
+                public void callStart(okhttp3.Call call) {
+                    Log.d(TAG, "[Event] callStart: " + call.request().url());
+                }
+                
+                @Override
+                public void dnsStart(okhttp3.Call call, String domainName) {
+                    Log.d(TAG, "[Event] dnsStart: " + domainName);
+                }
+                
+                @Override
+                public void dnsEnd(okhttp3.Call call, String domainName, java.util.List<java.net.InetAddress> inetAddressList) {
+                    Log.d(TAG, "[Event] dnsEnd: " + domainName + " -> " + inetAddressList.size() + " IPs");
+                }
+                
+                @Override
+                public void connectStart(okhttp3.Call call, java.net.InetSocketAddress inetSocketAddress, java.net.Proxy proxy) {
+                    Log.d(TAG, "[Event] connectStart: " + inetSocketAddress);
+                }
+                
+                @Override
+                public void secureConnectStart(okhttp3.Call call) {
+                    Log.d(TAG, "[Event] secureConnectStart (SSL/TLS)");
+                }
+                
+                @Override
+                public void secureConnectEnd(okhttp3.Call call, okhttp3.Handshake handshake) {
+                    Log.d(TAG, "[Event] secureConnectEnd: " + (handshake != null ? handshake.tlsVersion() : "null"));
+                }
+                
+                @Override
+                public void connectEnd(okhttp3.Call call, java.net.InetSocketAddress inetSocketAddress, java.net.Proxy proxy, okhttp3.Protocol protocol) {
+                    Log.d(TAG, "[Event] connectEnd: " + protocol);
+                }
+                
+                @Override
+                public void connectFailed(okhttp3.Call call, java.net.InetSocketAddress inetSocketAddress, java.net.Proxy proxy, okhttp3.Protocol protocol, IOException ioe) {
+                    Log.e(TAG, "[Event] connectFailed: " + inetSocketAddress, ioe);
+                }
+                
+                @Override
+                public void connectionAcquired(okhttp3.Call call, okhttp3.Connection connection) {
+                    Log.d(TAG, "[Event] connectionAcquired");
+                }
+                
+                @Override
+                public void requestHeadersStart(okhttp3.Call call) {
+                    Log.d(TAG, "[Event] requestHeadersStart");
+                }
+                
+                @Override
+                public void requestHeadersEnd(okhttp3.Call call, okhttp3.Request request) {
+                    Log.d(TAG, "[Event] requestHeadersEnd");
+                }
+                
+                @Override
+                public void requestBodyStart(okhttp3.Call call) {
+                    Log.d(TAG, "[Event] requestBodyStart");
+                }
+                
+                @Override
+                public void requestBodyEnd(okhttp3.Call call, long byteCount) {
+                    Log.d(TAG, "[Event] requestBodyEnd: " + byteCount + " bytes");
+                }
+                
+                @Override
+                public void responseHeadersStart(okhttp3.Call call) {
+                    Log.d(TAG, "[Event] responseHeadersStart ✅ SERVIDOR RESPONDEU!");
+                }
+                
+                @Override
+                public void responseHeadersEnd(okhttp3.Call call, okhttp3.Response response) {
+                    Log.i(TAG, "[Event] responseHeadersEnd: HTTP " + response.code() + " " + response.message());
+                }
+                
+                @Override
+                public void responseBodyStart(okhttp3.Call call) {
+                    Log.d(TAG, "[Event] responseBodyStart");
+                }
+                
+                @Override
+                public void responseBodyEnd(okhttp3.Call call, long byteCount) {
+                    Log.d(TAG, "[Event] responseBodyEnd: " + byteCount + " bytes");
+                }
+                
+                @Override
+                public void callEnd(okhttp3.Call call) {
+                    Log.i(TAG, "[Event] callEnd ✅ SUCESSO");
+                }
+                
+                @Override
+                public void callFailed(okhttp3.Call call, IOException ioe) {
+                    Log.e(TAG, "[Event] callFailed ❌ ERRO", ioe);
+                }
+                
+                @Override
+                public void canceled(okhttp3.Call call) {
+                    Log.w(TAG, "[Event] canceled");
+                }
+            })
+            // ✅ MELHORADO: Interceptor com try-catch robusto
             .addInterceptor(chain -> {
-                // ✅ NOVO: Interceptor para logging detalhado
                 okhttp3.Request request = chain.request();
                 Log.d(TAG, "[Interceptor] Enviando: " + request.url());
                 long startTime = System.currentTimeMillis();
                 
-                okhttp3.Response response = chain.proceed(request);
-                
-                long duration = System.currentTimeMillis() - startTime;
-                Log.d(TAG, "[Interceptor] Recebido em " + duration + "ms: " + response.code());
-                
-                return response;
+                try {
+                    Log.d(TAG, "[Interceptor] Chamando chain.proceed()...");
+                    okhttp3.Response response = chain.proceed(request);
+                    
+                    long duration = System.currentTimeMillis() - startTime;
+                    Log.i(TAG, "[Interceptor] ✅ Recebido em " + duration + "ms: HTTP " + response.code());
+                    
+                    return response;
+                    
+                } catch (java.net.SocketTimeoutException e) {
+                    long duration = System.currentTimeMillis() - startTime;
+                    Log.e(TAG, "[Interceptor] ❌ SocketTimeoutException após " + duration + "ms", e);
+                    throw e;
+                    
+                } catch (java.net.UnknownHostException e) {
+                    long duration = System.currentTimeMillis() - startTime;
+                    Log.e(TAG, "[Interceptor] ❌ UnknownHostException após " + duration + "ms", e);
+                    throw e;
+                    
+                } catch (java.net.ConnectException e) {
+                    long duration = System.currentTimeMillis() - startTime;
+                    Log.e(TAG, "[Interceptor] ❌ ConnectException após " + duration + "ms", e);
+                    throw e;
+                    
+                } catch (IOException e) {
+                    long duration = System.currentTimeMillis() - startTime;
+                    Log.e(TAG, "[Interceptor] ❌ IOException após " + duration + "ms", e);
+                    Log.e(TAG, "[Interceptor] Tipo: " + e.getClass().getSimpleName());
+                    Log.e(TAG, "[Interceptor] Mensagem: " + e.getMessage());
+                    throw e;
+                    
+                } catch (Exception e) {
+                    long duration = System.currentTimeMillis() - startTime;
+                    Log.e(TAG, "[Interceptor] ❌ Exception inesperada após " + duration + "ms", e);
+                    throw new IOException("Erro inesperado no interceptor", e);
+                }
             })
             .build();
 
