@@ -4,6 +4,8 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.util.Log;
 
+import com.example.choppontap.BuildConfig;
+
 import java.io.IOException;
 import java.net.URL;
 import java.util.Date;
@@ -58,31 +60,58 @@ public class ApiHelper {
     private final String urlApi = "https://ochoppoficial.com.br/";
     private final String api = urlApi + "api/";
 
-    // ✅ MELHORADO: Chave JWT mais forte (em produção, usar variável de ambiente)
-    private final String key = "sua_chave_secreta_forte_aqui_com_mais_caracteres_aleatorios_2026";
+    // ✅ CORRIGIDO: Chave JWT sincronizada com backend PHP
+    // IMPORTANTE: Esta chave DEVE ser a mesma definida em config.php (JWT_SECRET)
+    private final String key = "teaste";
 
     /**
-     * ✅ MELHORADO: Gerar token JWT com expiração e claims válidos
+     * ✅ CORRIGIDO: Gerar token JWT compatível com backend PHP
+     * 
+     * Backend PHP espera:
+     * - Claims: iat (issued at), exp (expiration), jti (JWT ID)
+     * - Algoritmo: HS256
+     * - Chave: "teaste" (UTF-8)
      */
     private String gerarToken() {
         try {
-            // Expiração: 1 hora
-            long expirationTime = System.currentTimeMillis() + (60 * 60 * 1000);
+            // Expiração: 1 hora (3600 segundos)
+            long nowMillis = System.currentTimeMillis();
+            Date now = new Date(nowMillis);
+            long expirationMillis = nowMillis + (60 * 60 * 1000);
+            Date expiration = new Date(expirationMillis);
 
+            // Gerar JTI (JWT ID) único
+            String jti = java.util.UUID.randomUUID().toString().replace("-", "");
+
+            // Construir token com claims compatíveis com PHP
             String token = Jwts.builder()
-                    .claim("app", "choppon_tap")
-                    .claim("version", "1.0")
-                    .claim("timestamp", System.currentTimeMillis())
-                    .setIssuedAt(new Date())
-                    .setExpiration(new Date(expirationTime))
-                    .signWith(SignatureAlgorithm.HS256, key.getBytes())
+                    .setIssuedAt(now)                    // iat
+                    .setExpiration(expiration)           // exp
+                    .setId(jti)                          // jti
+                    .claim("app", "choppon_tap")         // claim customizado
+                    .claim("version", "1.0")             // claim customizado
+                    .signWith(
+                        SignatureAlgorithm.HS256,
+                        key.getBytes(java.nio.charset.StandardCharsets.UTF_8)  // ✅ UTF-8 explícito
+                    )
                     .compact();
 
             Log.d(TAG, "Token JWT gerado com sucesso");
+            Log.d(TAG, "JTI: " + jti);
+            Log.d(TAG, "Issued At: " + now.getTime() / 1000 + " (" + now + ")");
+            Log.d(TAG, "Expiration: " + expiration.getTime() / 1000 + " (" + expiration + ")");
+            Log.d(TAG, "Token (primeiros 50 chars): " + token.substring(0, Math.min(50, token.length())) + "...");
+            
+            // ✅ NOVO: Log do token completo para debug (remover em produção)
+            if (BuildConfig.DEBUG) {
+                Log.v(TAG, "Token completo: " + token);
+            }
+
             return token;
 
         } catch (Exception e) {
             Log.e(TAG, "Erro ao gerar token JWT", e);
+            Log.e(TAG, "Stack trace completo:", e);
             return "";
         }
     }
