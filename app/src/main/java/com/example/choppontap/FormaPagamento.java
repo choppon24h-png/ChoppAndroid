@@ -77,6 +77,8 @@ public class FormaPagamento extends AppCompatActivity {
     private String quantidade;
 
     private static final String TAG = "PAGAMENTO_DEBUG";
+    private int retryCount = 0;
+    private static final int MAX_RETRIES = 3;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -230,9 +232,16 @@ public class FormaPagamento extends AppCompatActivity {
     }
 
     public void sendRequest(String valor, String descricao, String quantidade, String cpf, String method) {
+        // ✅ NOVO: Gerar CPF padrão válido quando vazio
+        String cpfFinal = CpfMask.unmask(cpf);
+        if (cpfFinal == null || cpfFinal.trim().isEmpty()) {
+            cpfFinal = "11144477735";  // CPF padrão válido (111.444.777-35)
+            Log.d(TAG, "CPF vazio, usando CPF padrão: " + cpfFinal);
+        }
+        
         Map<String, String> body = new HashMap<>();
         body.put("android_id", android_id);
-        body.put("cpf", CpfMask.unmask(cpf));
+        body.put("cpf", cpfFinal);
         body.put("valor", valor);
         body.put("quantidade", quantidade);
         body.put("descricao", descricao);
@@ -248,11 +257,31 @@ public class FormaPagamento extends AppCompatActivity {
             @Override
             public void onFailure(Call call, IOException e) {
                 Log.e(TAG, "Falha na requisição create_order: " + e.getMessage());
-                showErrorMessage("Falha de rede. Verifique a conexão.");
+                
+                // ✅ NOVO: Retry automático com backoff exponencial
+                if (retryCount < MAX_RETRIES) {
+                    retryCount++;
+                    int delay = (int) Math.pow(2, retryCount) * 1000;  // 2s, 4s, 8s
+                    
+                    Log.w(TAG, "Tentando novamente em " + delay + "ms (" + retryCount + "/" + MAX_RETRIES + ")");
+                    
+                    runOnUiThread(() -> {
+                        txtPreloader.setText("Tentando novamente (" + retryCount + "/" + MAX_RETRIES + ")...");
+                    });
+                    
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                        sendRequest(valor, descricao, quantidade, cpf, method);
+                    }, delay);
+                } else {
+                    retryCount = 0;
+                    Log.e(TAG, "Falha após " + MAX_RETRIES + " tentativas");
+                    showErrorMessage("Falha de rede após múltiplas tentativas. Verifique a conexão.");
+                }
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
+                retryCount = 0;  // ✅ Reset retry count em caso de sucesso
                 try (ResponseBody responseBody = response.body()) {
                     String json = responseBody != null ? responseBody.string() : "";
                     Log.d(TAG, "Resposta create_order: " + json);

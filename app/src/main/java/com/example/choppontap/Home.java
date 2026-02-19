@@ -222,16 +222,32 @@ public class Home extends AppCompatActivity {
     }
     
     private void carregarImagem(String url) {
-        if (url == null || url.isEmpty()) return;
+        if (url == null || url.isEmpty()) {
+            Log.w("HOME", "URL da imagem vazia ou nula");
+            return;
+        }
+        
+        Log.d("HOME", "Carregando imagem: " + url);
+        
         new Thread(() -> {
             try {
                 Tap tempTap = new Tap();
                 tempTap.image = url;
                 Bitmap bmp = new ApiHelper().getImage(tempTap);
-                if (bmp != null) runOnUiThread(() -> {
-                    if (imageView != null) imageView.setImageBitmap(bmp);
-                });
-            } catch (Exception e) { Log.e("HOME", "Erro ao carregar imagem", e); }
+                
+                if (bmp != null) {
+                    runOnUiThread(() -> {
+                        if (imageView != null) {
+                            imageView.setImageBitmap(bmp);
+                            Log.d("HOME", "Imagem carregada com sucesso");
+                        }
+                    });
+                } else {
+                    Log.e("HOME", "Bitmap retornado é null");
+                }
+            } catch (Exception e) {
+                Log.e("HOME", "Erro ao carregar imagem: " + e.getMessage(), e);
+            }
         }).start();
     }
 
