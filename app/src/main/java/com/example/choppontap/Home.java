@@ -227,18 +227,6 @@ public class Home extends AppCompatActivity {
     
     /**
      * ✅ CORRIGIDO: Carrega imagem com ExecutorService gerenciado
-     * 
-     * PROBLEMA ANTERIOR:
-     * - Thread não gerenciada causava StreamResetException: CANCEL
-     * - Requisição era cancelada quando Activity era destruída
-     * - Sem verificação de lifecycle
-     * 
-     * CORREÇÃO:
-     * - Usa ExecutorService para gerenciar threads
-     * - Cancela tarefa anterior se existir
-     * - Verifica se Activity ainda está ativa antes de atualizar UI
-     * - Logs detalhados para debug
-     * - Cleanup no onDestroy()
      */
     private void carregarImagem(String url) {
         if (url == null || url.isEmpty()) {
@@ -260,7 +248,7 @@ public class Home extends AppCompatActivity {
                 Log.d("HOME", "Thread iniciada para carregar imagem");
                 
                 // Verificar se thread foi interrompida
-                if (Thread.interrupted()) {
+                if (Thread.currentThread().isInterrupted()) {
                     Log.w("HOME", "⚠️ Thread interrompida antes de iniciar download");
                     return;
                 }
@@ -272,7 +260,7 @@ public class Home extends AppCompatActivity {
                 Bitmap bmp = new ApiHelper().getImage(tempTap);
                 
                 // Verificar novamente se thread foi interrompida
-                if (Thread.interrupted()) {
+                if (Thread.currentThread().isInterrupted()) {
                     Log.w("HOME", "⚠️ Thread interrompida após download");
                     return;
                 }
@@ -296,11 +284,13 @@ public class Home extends AppCompatActivity {
                     });
                 } else {
                     Log.e("HOME", "❌ Bitmap retornado é null");
-                    Log.e("HOME", "Verifique logs do ApiHelper para detalhes");
+                    // FALLBACK: Informar que a imagem não carregou na UI se necessário
+                    runOnUiThread(() -> {
+                        if (txtBebida != null) {
+                            txtBebida.setText(bebida + " (Imagem não disponível)");
+                        }
+                    });
                 }
-            } catch (InterruptedException e) {
-                Log.w("HOME", "⚠️ Thread interrompida durante carregamento", e);
-                Thread.currentThread().interrupt();
             } catch (Exception e) {
                 Log.e("HOME", "❌ Erro ao carregar imagem", e);
                 Log.e("HOME", "Tipo: " + e.getClass().getSimpleName());
