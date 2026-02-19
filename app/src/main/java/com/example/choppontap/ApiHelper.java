@@ -33,12 +33,26 @@ import okhttp3.Response;
 public class ApiHelper {
     private static final String TAG = "ApiHelper";
 
-    // ✅ NOVO: OkHttpClient com timeouts configurados
+    // ✅ MELHORADO: OkHttpClient com timeouts mais curtos para debug rápido
     private final OkHttpClient client = new OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .writeTimeout(8, TimeUnit.SECONDS)
+            .callTimeout(15, TimeUnit.SECONDS)  // ✅ NOVO: Timeout total da chamada
             .retryOnConnectionFailure(true)
+            .addInterceptor(chain -> {
+                // ✅ NOVO: Interceptor para logging detalhado
+                okhttp3.Request request = chain.request();
+                Log.d(TAG, "[Interceptor] Enviando: " + request.url());
+                long startTime = System.currentTimeMillis();
+                
+                okhttp3.Response response = chain.proceed(request);
+                
+                long duration = System.currentTimeMillis() - startTime;
+                Log.d(TAG, "[Interceptor] Recebido em " + duration + "ms: " + response.code());
+                
+                return response;
+            })
             .build();
 
     private final String urlApi = "https://ochoppoficial.com.br/";
@@ -124,7 +138,12 @@ public class ApiHelper {
                     .build();
 
             Log.d(TAG, "Enviando requisição...");
-            client.newCall(request).enqueue(new Callback() {
+            Log.d(TAG, "Thread atual: " + Thread.currentThread().getName());
+            
+            Call call = client.newCall(request);
+            Log.d(TAG, "Call criado: " + call);
+            
+            call.enqueue(new Callback() {
                 @Override
                 public void onFailure(Call call, IOException e) {
                     Log.e(TAG, "=== FALHA NA REQUISIÇÃO ===", e);
@@ -139,9 +158,30 @@ public class ApiHelper {
                 @Override
                 public void onResponse(Call call, Response response) throws IOException {
                     Log.i(TAG, "=== RESPOSTA RECEBIDA ===");
+                    Log.i(TAG, "Thread: " + Thread.currentThread().getName());
                     Log.i(TAG, "Código HTTP: " + response.code());
                     Log.i(TAG, "Mensagem: " + response.message());
+                    Log.i(TAG, "Protocolo: " + response.protocol());
                     Log.d(TAG, "Headers: " + response.headers());
+                    
+                    // ✅ NOVO: Log do corpo da resposta
+                    String responseBodyString = null;
+                    if (response.body() != null) {
+                        try {
+                            responseBodyString = response.body().string();
+                            Log.d(TAG, "Corpo da resposta (" + responseBodyString.length() + " chars): " + 
+                                (responseBodyString.length() > 500 ? responseBodyString.substring(0, 500) + "..." : responseBodyString));
+                            
+                            // ✅ IMPORTANTE: Recriar o ResponseBody porque já foi consumido
+                            response = response.newBuilder()
+                                .body(okhttp3.ResponseBody.create(response.body().contentType(), responseBodyString))
+                                .build();
+                        } catch (Exception e) {
+                            Log.e(TAG, "Erro ao ler corpo da resposta", e);
+                        }
+                    } else {
+                        Log.w(TAG, "Corpo da resposta é NULL");
+                    }
 
                     if (response.isSuccessful()) {
                         Log.i(TAG, "✅ Requisição bem-sucedida");

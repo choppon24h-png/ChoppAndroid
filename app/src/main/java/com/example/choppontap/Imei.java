@@ -228,6 +228,8 @@ public class Imei extends AppCompatActivity {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 // ✅ MELHORADO: Logging completo
+                Log.e(TAG, "=== CALLBACK onFailure EXECUTADO ===");
+                Log.e(TAG, "Thread: " + Thread.currentThread().getName());
                 Log.e(TAG, "=== ERRO DE REDE ===");
                 Log.e(TAG, "Mensagem: " + e.getMessage());
                 Log.e(TAG, "Causa: " + (e.getCause() != null ? e.getCause().toString() : "N/A"));
@@ -268,6 +270,11 @@ public class Imei extends AppCompatActivity {
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) {
+                Log.i(TAG, "=== CALLBACK onResponse EXECUTADO ===");
+                Log.i(TAG, "Thread: " + Thread.currentThread().getName());
+                Log.i(TAG, "Response code: " + response.code());
+                Log.i(TAG, "Response successful: " + response.isSuccessful());
+                
                 final String jsonResponse;
                 try (ResponseBody responseBody = response.body()) {
                     if (!response.isSuccessful() || responseBody == null) {
@@ -286,6 +293,7 @@ public class Imei extends AppCompatActivity {
                         return;
                     }
                     jsonResponse = responseBody.string();
+                    Log.d(TAG, "Corpo JSON recebido (" + jsonResponse.length() + " chars): " + jsonResponse);
                 } catch (IOException e) {
                     Log.e(TAG, "Erro ao ler resposta da API.", e);
                     runOnUiThread(() -> {
@@ -300,6 +308,7 @@ public class Imei extends AppCompatActivity {
                         return;
                     }
                     try {
+                        Log.i(TAG, "=== PROCESSANDO JSON ===");
                         Log.d(TAG, "JSON Recebido: " + jsonResponse);
                         Gson gson = new Gson();
                         Tap tap = gson.fromJson(jsonResponse, Tap.class);
