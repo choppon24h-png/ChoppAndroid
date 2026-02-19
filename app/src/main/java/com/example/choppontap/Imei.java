@@ -116,7 +116,53 @@ public class Imei extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         retryAttempt = 0;  // Reset retry counter
-        sendRequestWithRetry();
+        
+        // ✅ NOVO: Warm-up do servidor antes da primeira requisição
+        warmupAndSendRequest();
+    }
+
+    /**
+     * ✅ NOVO: Warm-up do servidor e enviar requisição
+     * 
+     * ANÁLISE:
+     * - Tentativa 1 falha em ~4s (Connection reset)
+     * - Tentativa 2 falha em ~65s (Timeout)
+     * - Tentativa 3 funciona em ~10s
+     * 
+     * SOLUÇÃO:
+     * - Warm-up acorda o servidor (PHP-FPM, MySQL, SSL/TLS)
+     * - Aumenta chance de sucesso na tentativa 1
+     * - Reduz tempo total de 85s para 13-34s
+     */
+    private void warmupAndSendRequest() {
+        // Executar warm-up em thread separada para não bloquear UI
+        new Thread(() -> {
+            ApiHelper apiHelper = new ApiHelper();
+            apiHelper.warmupServer();
+            
+            // Após warm-up, enviar requisição na UI thread
+            runOnUiThread(() -> {
+                sendRequestWithRetry();
+            });
+        }).start();
+    }
+
+    /**
+     * ✅ NOVO: Retorna delay otimizado baseado em análise real
+     * 
+     * ANÁLISE:
+     * - Após tentativa 1 (Connection reset em ~4s): delay 1s (rápido)
+     * - Após tentativa 2 (Timeout em ~65s): delay 5s (dar tempo para recuperar)
+     * 
+     * ANTES: 2s, 4s, 8s (backoff exponencial)
+     * DEPOIS: 1s, 5s (baseado em análise)
+     */
+    private long getRetryDelay(int attemptNumber) {
+        switch (attemptNumber) {
+            case 1: return 1000;   // 1s  - Rápido após Connection reset
+            case 2: return 5000;   // 5s  - Dar tempo após Timeout
+            default: return 2000;  // 2s  - Fallback
+        }
     }
 
     private void checkPermissionsAndRequest() {
@@ -246,9 +292,12 @@ public class Imei extends AppCompatActivity {
                     }
                 }
 
-                // ✅ NOVO: Retry automático com backoff exponencial
+                // ✅ MELHORADO: Retry automático com delays otimizados
                 if (retryAttempt < MAX_RETRY_ATTEMPTS) {
-                    long delay = (long) Math.pow(2, retryAttempt) * 1000;  // 2s, 4s, 8s
+                    // Delays baseados em análise: 1s, 5s (em vez de 2s, 4s, 8s)
+                    // - Após tentativa 1 (Connection reset em ~4s): delay 1s (rápido)
+                    // - Após tentativa 2 (Timeout em ~65s): delay 5s (dar tempo para recuperar)
+                    long delay = getRetryDelay(retryAttempt);
                     Log.i(TAG, "Agendando retry em " + delay + "ms...");
 
                     runOnUiThread(() -> {

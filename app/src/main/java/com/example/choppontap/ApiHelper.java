@@ -43,6 +43,103 @@ public class ApiHelper {
     private final String api = urlApi + "api/";
     private final String key = "teaste";
 
+    /**
+     * ✅ NOVO: Warm-up do servidor
+     * 
+     * Faz uma requisição rápida para "acordar" o servidor antes da requisição real.
+     * Ignora o resultado (sucesso ou falha).
+     * 
+     * BENEFÍCIO: Reduz chance de Connection reset na primeira tentativa real.
+     * ANÁLISE: Tentativa 1 falha em ~4s (Connection reset), tentativa 3 funciona.
+     *          Warm-up prepara o servidor (PHP-FPM, MySQL, SSL/TLS).
+     */
+    public void warmupServer() {
+        Log.d(TAG, "🔥 [Warm-up] Iniciando...");
+        
+        Request warmupRequest = new Request.Builder()
+            .url(api + "verify_tap.php")  // Mesmo endpoint
+            .get()  // GET é mais leve que POST
+            .addHeader("X-Warmup", "true")  // Identificar como warm-up
+            .build();
+        
+        // Cliente com timeout muito curto (2-3s)
+        OkHttpClient warmupClient = client.newBuilder()
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .readTimeout(2, TimeUnit.SECONDS)
+            .callTimeout(3, TimeUnit.SECONDS)
+            .build();
+        
+        try {
+            long startTime = System.currentTimeMillis();
+            Response response = warmupClient.newCall(warmupRequest).execute();
+            long duration = System.currentTimeMillis() - startTime;
+            
+            Log.i(TAG, "✅ [Warm-up] Servidor respondeu em " + duration + "ms (código " + response.code() + ")");
+            response.close();
+            
+        } catch (IOException e) {
+            Log.d(TAG, "⚠️ [Warm-up] Falhou: " + e.getMessage() + " (esperado, servidor foi acordado)");
+        }
+        
+        // Aguardar 1 segundo para servidor se estabilizar
+        try {
+            Thread.sleep(1000);
+            Log.d(TAG, "[Warm-up] Aguardou 1s para estabilização");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.w(TAG, "[Warm-up] Interrompido durante sleep");
+        }
+    }
+
+    /**
+     * ✅ NOVO: Retorna timeout baseado no número da tentativa
+     * 
+     * ANÁLISE:
+     * - Tentativa 1: Falha rápido (Connection reset em ~4s) → timeout 10s
+     * - Tentativa 2: Falha lento (Timeout em ~65s) → timeout 20s
+     * - Tentativa 3: Sucesso (Responde em ~10s) → timeout 30s
+     */
+    private int getConnectTimeout(int attemptNumber) {
+        switch (attemptNumber) {
+            case 1: return 10;  // 10s - Rápido
+            case 2: return 20;  // 20s - Médio
+            case 3: return 30;  // 30s - Longo
+            default: return 15; // Fallback
+        }
+    }
+
+    private int getReadTimeout(int attemptNumber) {
+        switch (attemptNumber) {
+            case 1: return 10;  // 10s
+            case 2: return 20;  // 20s
+            case 3: return 30;  // 30s
+            default: return 15;
+        }
+    }
+
+    private int getCallTimeout(int attemptNumber) {
+        // Call timeout = connect + read + margem
+        return getConnectTimeout(attemptNumber) + getReadTimeout(attemptNumber) + 5;
+    }
+
+    /**
+     * ✅ NOVO: Cria cliente OkHttp com timeout específico para a tentativa
+     */
+    public OkHttpClient getClientWithTimeout(int attemptNumber) {
+        int connectTimeout = getConnectTimeout(attemptNumber);
+        int readTimeout = getReadTimeout(attemptNumber);
+        int callTimeout = getCallTimeout(attemptNumber);
+        
+        Log.d(TAG, String.format("[Timeout] Tentativa %d: connect=%ds, read=%ds, call=%ds",
+            attemptNumber, connectTimeout, readTimeout, callTimeout));
+        
+        return client.newBuilder()
+            .connectTimeout(connectTimeout, TimeUnit.SECONDS)
+            .readTimeout(readTimeout, TimeUnit.SECONDS)
+            .callTimeout(callTimeout, TimeUnit.SECONDS)
+            .build();
+    }
+
     private String gerarToken() {
         try {
             long nowMillis = System.currentTimeMillis();
@@ -62,7 +159,17 @@ public class ApiHelper {
         }
     }
 
+    /**
+     * ✅ MANTIDO: Método original para compatibilidade
+     */
     public void sendPost(Map<String, String> body, String endpoint, Callback callback) {
+        sendPost(body, endpoint, callback, 1);  // Usa tentativa 1 como padrão
+    }
+
+    /**
+     * ✅ NOVO: Método com attemptNumber para timeout progressivo
+     */
+    public void sendPost(Map<String, String> body, String endpoint, Callback callback, int attemptNumber) {
         try {
             String token = gerarToken();
             FormBody.Builder builder = new FormBody.Builder();
@@ -80,7 +187,9 @@ public class ApiHelper {
                     .post(builder.build())
                     .build();
 
-            client.newCall(request).enqueue(callback);
+            // ✅ MELHORADO: Usa cliente com timeout específico para esta tentativa
+            OkHttpClient clientWithTimeout = getClientWithTimeout(attemptNumber);
+            clientWithTimeout.newCall(request).enqueue(callback);
         } catch (Exception e) {
             Log.e(TAG, "Erro preparado requisição", e);
             callback.onFailure(null, new IOException(e));
