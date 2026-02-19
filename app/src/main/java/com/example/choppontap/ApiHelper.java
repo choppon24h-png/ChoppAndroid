@@ -405,7 +405,15 @@ public class ApiHelper {
     }
 
     /**
-     * Obter imagem da URL
+     * ✅ CORRIGIDO: Obter imagem da URL com logs detalhados e tratamento de erros
+     * 
+     * MELHORIAS:
+     * - Usa OkHttpClient configurado (timeouts, retry, etc.)
+     * - Verifica status HTTP (200 OK?)
+     * - Verifica Content-Type (image/*?)
+     * - Logs detalhados de cada etapa
+     * - Tratamento específico de erros
+     * - Debug de bytes em caso de falha
      */
     public Bitmap getImage(Tap object) throws IOException {
         if (object.image == null || object.image.isEmpty()) {
@@ -413,8 +421,122 @@ public class ApiHelper {
             return null;
         }
 
-        Log.d(TAG, "Baixando imagem de: " + object.image);
-        URL url = new URL(object.image);
-        return BitmapFactory.decodeStream(url.openConnection().getInputStream());
+        Log.d(TAG, "=== INICIANDO DOWNLOAD DE IMAGEM ===");
+        Log.d(TAG, "URL: " + object.image);
+
+        Request request = new Request.Builder()
+                .url(object.image)
+                .get()
+                .build();
+
+        try (Response response = client.newCall(request).execute()) {
+            // ✅ Log detalhado da resposta HTTP
+            Log.i(TAG, "Status HTTP: " + response.code() + " " + response.message());
+            
+            String contentType = response.header("Content-Type");
+            String contentLength = response.header("Content-Length");
+            
+            Log.d(TAG, "Content-Type: " + contentType);
+            Log.d(TAG, "Content-Length: " + contentLength);
+
+            // ✅ Verificar se resposta foi bem-sucedida
+            if (!response.isSuccessful()) {
+                Log.e(TAG, "❌ Erro HTTP: " + response.code());
+                Log.e(TAG, "Mensagem: " + response.message());
+                
+                // Tentar ler corpo da resposta para debug
+                try {
+                    String errorBody = response.body().string();
+                    Log.e(TAG, "Corpo do erro (primeiros 200 chars): " + 
+                        errorBody.substring(0, Math.min(200, errorBody.length())));
+                } catch (Exception e) {
+                    Log.e(TAG, "Não foi possível ler corpo do erro", e);
+                }
+                
+                return null;
+            }
+
+            // ✅ Verificar se é realmente uma imagem
+            if (contentType == null || !contentType.toLowerCase().startsWith("image/")) {
+                Log.e(TAG, "❌ Content-Type inválido: " + contentType);
+                Log.e(TAG, "Esperado: image/* (image/jpeg, image/png, etc.)");
+                
+                // Tentar ler corpo para debug
+                try {
+                    String body = response.body().string();
+                    Log.e(TAG, "Corpo recebido (primeiros 200 chars): " + 
+                        body.substring(0, Math.min(200, body.length())));
+                } catch (Exception e) {
+                    Log.e(TAG, "Não foi possível ler corpo", e);
+                }
+                
+                return null;
+            }
+
+            // ✅ Obter bytes da imagem
+            byte[] imageBytes = response.body().bytes();
+            Log.d(TAG, "Bytes recebidos: " + imageBytes.length);
+
+            // ✅ Verificar se recebeu dados
+            if (imageBytes.length == 0) {
+                Log.e(TAG, "❌ Nenhum byte recebido");
+                return null;
+            }
+
+            // ✅ Tentar decodificar
+            Log.d(TAG, "Decodificando bitmap...");
+            Bitmap bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
+
+            if (bitmap == null) {
+                Log.e(TAG, "❌ BitmapFactory.decodeByteArray retornou null");
+                Log.e(TAG, "Possíveis causas:");
+                Log.e(TAG, "  1. Imagem corrompida");
+                Log.e(TAG, "  2. Formato de imagem não suportado");
+                Log.e(TAG, "  3. Dados não são realmente uma imagem");
+                
+                // Debug: mostrar primeiros bytes em hexadecimal
+                int debugLength = Math.min(100, imageBytes.length);
+                StringBuilder hexDump = new StringBuilder();
+                for (int i = 0; i < debugLength; i++) {
+                    hexDump.append(String.format("%02X ", imageBytes[i]));
+                    if ((i + 1) % 16 == 0) hexDump.append("\n");
+                }
+                Log.e(TAG, "Primeiros " + debugLength + " bytes (hex):\n" + hexDump.toString());
+                
+                return null;
+            }
+
+            // ✅ Sucesso!
+            Log.i(TAG, "✅ Imagem carregada com sucesso");
+            Log.d(TAG, "Dimensões: " + bitmap.getWidth() + "x" + bitmap.getHeight());
+            Log.d(TAG, "Config: " + bitmap.getConfig());
+            Log.d(TAG, "Bytes por pixel: " + bitmap.getByteCount() / (bitmap.getWidth() * bitmap.getHeight()));
+            
+            return bitmap;
+
+        } catch (java.net.MalformedURLException e) {
+            Log.e(TAG, "❌ URL inválida: " + object.image, e);
+            throw new IOException("URL inválida", e);
+            
+        } catch (java.net.UnknownHostException e) {
+            Log.e(TAG, "❌ Host desconhecido (DNS falhou): " + object.image, e);
+            throw new IOException("Host desconhecido", e);
+            
+        } catch (java.net.SocketTimeoutException e) {
+            Log.e(TAG, "❌ Timeout ao baixar imagem: " + object.image, e);
+            throw new IOException("Timeout", e);
+            
+        } catch (IOException e) {
+            Log.e(TAG, "❌ IOException ao carregar imagem", e);
+            Log.e(TAG, "Tipo: " + e.getClass().getSimpleName());
+            Log.e(TAG, "Mensagem: " + e.getMessage());
+            throw e;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Exceção inesperada ao carregar imagem", e);
+            Log.e(TAG, "Tipo: " + e.getClass().getSimpleName());
+            Log.e(TAG, "Mensagem: " + e.getMessage());
+            throw new IOException("Erro inesperado ao carregar imagem", e);
+        }
     }
 }
