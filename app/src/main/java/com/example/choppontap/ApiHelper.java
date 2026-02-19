@@ -35,13 +35,19 @@ import okhttp3.Response;
 public class ApiHelper {
     private static final String TAG = "ApiHelper";
 
-    // ✅ CORRIGIDO: OkHttpClient com EventListener e interceptor robusto
+    // ✅ CORRIGIDO: OkHttpClient com timeouts aumentados e ConnectionSpec otimizado
     private final OkHttpClient client = new OkHttpClient.Builder()
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
-            .writeTimeout(8, TimeUnit.SECONDS)
-            .callTimeout(15, TimeUnit.SECONDS)
+            // ✅ NOVO: Timeouts aumentados para servidor lento
+            .connectTimeout(15, TimeUnit.SECONDS)  // Era 8s - Aumentado para handshake SSL lento
+            .readTimeout(15, TimeUnit.SECONDS)     // Era 8s - Aumentado para servidor lento
+            .writeTimeout(10, TimeUnit.SECONDS)    // Era 8s
+            .callTimeout(30, TimeUnit.SECONDS)     // Era 15s - Timeout total aumentado
             .retryOnConnectionFailure(true)
+            // ✅ NOVO: ConnectionSpec para melhor compatibilidade SSL/TLS
+            .connectionSpecs(java.util.Arrays.asList(
+                okhttp3.ConnectionSpec.MODERN_TLS,
+                okhttp3.ConnectionSpec.COMPATIBLE_TLS
+            ))
             // ✅ NOVO: EventListener para monitorar todas as etapas da conexão
             .eventListener(new okhttp3.EventListener() {
                 @Override
