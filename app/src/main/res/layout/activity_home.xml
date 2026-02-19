@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FFFFFF"
+    android:padding="8dp">
+
+    <!-- ========== INDICADOR DE STATUS BLUETOOTH ========== -->
+    <include
+        android:id="@+id/bluetooth_status_container"
+        layout="@layout/bluetooth_status_indicator"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Logo Chopp ON -->
+    <ImageView
+        android:id="@+id/logoChoppOn"
+        android:layout_width="0dp"
+        android:layout_height="60dp"
+        android:layout_marginTop="4dp"
+        android:contentDescription="Logo Chopp ON"
+        android:scaleType="fitCenter"
+        android:src="@drawable/logo_choppon"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/bluetooth_status_container"
+        app:layout_constraintWidth_percent="0.6" />
+
+    <!-- Botão Calibrar -->
+    <Button
+        android:id="@+id/btnCalibrar"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:backgroundTint="@color/background"
+        android:padding="0dp"
+        android:visibility="visible"
+        app:cornerRadius="12dp"
+        app:icon="@mipmap/ic_support_foreground"
+        app:iconSize="32dp"
+        app:iconTint="@color/black"
+        app:layout_constraintBottom_toBottomOf="@+id/logoChoppOn"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.98"
+        app:layout_constraintTop_toTopOf="@+id/logoChoppOn" />
+
+    <!-- Imagem da Bebida (Expandida para 16:9) -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/cardBebida2"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="24dp"
+        app:cardCornerRadius="20dp"
+        app:cardElevation="6dp"
+        app:layout_constraintDimensionRatio="16:9"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/logoChoppOn">
+
+        <ImageView
+            android:id="@+id/imageBeer2"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="Imagem da bebida"
+            android:scaleType="centerCrop" />
+    </androidx.cardview.widget.CardView>
+
+    <!-- Nome da Bebida -->
+    <TextView
+        android:id="@+id/textView2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Bebida"
+        android:textColor="#666633"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/cardBebida2" />
+
+    <TextView
+        android:id="@+id/txtBebida"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Carregando..."
+        android:textAlignment="center"
+        android:textColor="#FF8C00"
+        android:textSize="26sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/textView2" />
+
+    <TextView
+        android:id="@+id/textView4"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Selecione o volume desejado:"
+        android:textColor="#333333"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/txtBebida" />
+
+    <!-- Grade de Botões Responsivos (Ajustam ao tamanho da tela) -->
+    <!-- Linha 1 -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn100"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="12dp"
+        android:backgroundTint="#FF8C00"
+        android:text="100 ml\nR$ 0,00"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        app:cornerRadius="16dp"
+        app:layout_constraintDimensionRatio="1.3:1"
+        app:layout_constraintEnd_toStartOf="@+id/btn300"
+        app:layout_constraintHorizontal_chainStyle="spread"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/textView4" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn300"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="24dp"
+        android:backgroundTint="@color/choppon_orange"
+        android:text="300 ml\nR$ 0,00"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        app:cornerRadius="16dp"
+        app:layout_constraintDimensionRatio="1.3:1"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/btn100"
+        app:layout_constraintTop_toTopOf="@+id/btn100" />
+
+    <!-- Linha 2 -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn500"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="12dp"
+        android:backgroundTint="#FF8C00"
+        android:text="500 ml\nR$ 0,00"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        app:cornerRadius="16dp"
+        app:layout_constraintDimensionRatio="1.3:1"
+        app:layout_constraintEnd_toEndOf="@+id/btn100"
+        app:layout_constraintStart_toStartOf="@+id/btn100"
+        app:layout_constraintTop_toBottomOf="@+id/btn100" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn700"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:backgroundTint="#FF8C00"
+        android:text="700 ml\nR$ 0,00"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        app:cornerRadius="16dp"
+        app:layout_constraintDimensionRatio="1.3:1"
+        app:layout_constraintEnd_toEndOf="@+id/btn300"
+        app:layout_constraintStart_toStartOf="@+id/btn300"
+        app:layout_constraintTop_toTopOf="@+id/btn500" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>
