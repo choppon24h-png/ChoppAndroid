@@ -167,8 +167,14 @@ public class FormaPagamento extends AppCompatActivity {
             txtValor.setText("R$ " + String.format("%.2f", extras.get("valor")).replace(".", ","));
 
             Sqlite banco = new Sqlite(getApplicationContext());
-            if (!banco.getCartaoEnabled()) {
+            boolean cartaoEnabled = banco.getCartaoEnabled();
+            Log.d(TAG, "Cartao habilitado no banco: " + cartaoEnabled);
+            
+            if (!cartaoEnabled) {
+                Log.w(TAG, "Desabilitando botões de cartão (banco retornou false)");
                 disableCardButtons();
+            } else {
+                Log.i(TAG, "Botões de cartão habilitados (banco retornou true)");
             }
         }
     }

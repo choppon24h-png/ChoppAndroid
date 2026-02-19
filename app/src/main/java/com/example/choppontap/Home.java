@@ -110,6 +110,15 @@ public class Home extends AppCompatActivity {
             bebida = extras.getString("bebida");
             valorBase = extras.getFloat("preco", 0.0f);
             imagemUrl = extras.getString("imagem");
+            
+            // ✅ NOVO: Processar extra "cartao" e salvar no banco
+            boolean cartaoHabilitado = extras.getBoolean("cartao", false);
+            Log.d("HOME_LIFECYCLE", "Extra cartao recebido: " + cartaoHabilitado);
+            
+            // Salvar no banco para uso no FormaPagamento
+            Sqlite banco = new Sqlite(getApplicationContext());
+            boolean salvou = banco.tapCartao(cartaoHabilitado);
+            Log.d("HOME_LIFECYCLE", "Cartao salvo no banco: " + salvou + " (valor: " + cartaoHabilitado + ")");
 
             Log.d("HOME_LIFECYCLE", "Dados recebidos da Intent. Atualizando UI.");
             updateFields(bebida, valorBase, imagemUrl);
@@ -158,6 +167,14 @@ public class Home extends AppCompatActivity {
                         if (tap == null || tap.bebida == null || tap.bebida.isEmpty()) {
                             redirecionarImei();
                         } else {
+                            // ✅ NOVO: Processar cartao da API e salvar no banco
+                            boolean cartaoHabilitado = (tap.cartao != null) && tap.cartao;
+                            Log.d("HOME_API", "Cartao recebido da API: " + cartaoHabilitado);
+                            
+                            Sqlite banco = new Sqlite(getApplicationContext());
+                            boolean salvou = banco.tapCartao(cartaoHabilitado);
+                            Log.d("HOME_API", "Cartao salvo no banco: " + salvou + " (valor: " + cartaoHabilitado + ")");
+                            
                             runOnUiThread(() -> updateFields(tap.bebida, tap.preco, tap.image));
                         }
                     } else {

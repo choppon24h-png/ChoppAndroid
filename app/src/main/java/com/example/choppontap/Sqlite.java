@@ -169,8 +169,8 @@ public class Sqlite  extends SQLiteOpenHelper {
     }
 
     public boolean tapCartao(Boolean ativo){
+        Log.d("SQLITE_CARTAO", "=== tapCartao() chamado com ativo=" + ativo + " ===");
         db = getWritableDatabase();
-
 
         Cursor cursor = db.query("tapCartao", new String[]{"ativo"},
                 "", null,
@@ -178,15 +178,20 @@ public class Sqlite  extends SQLiteOpenHelper {
         String ativoBanco = null;
         if (cursor != null && cursor.moveToFirst()) {
             ativoBanco = cursor.getString(cursor.getColumnIndexOrThrow("ativo"));
-            Log.d("a",ativoBanco);
+            Log.d("SQLITE_CARTAO", "Registro existente encontrado: ativo=" + ativoBanco);
             cursor.close();
+        } else {
+            Log.d("SQLITE_CARTAO", "Nenhum registro existente. Será feito INSERT.");
         }
 
         ContentValues value =  new ContentValues();
         Boolean result = false;
         value.put("ativo",ativo);
+        
         if(ativoBanco == null){
-            Boolean insertResult = db.insert("tapCartao",null,value) > 0;
+            long insertResult = db.insert("tapCartao",null,value);
+            result = insertResult > 0;
+            Log.i("SQLITE_CARTAO", "INSERT executado. ID inserido: " + insertResult + ", result=" + result);
         }else{
             String whereClause = "id = ?";
             String[] whereArgs = {String.valueOf(1)};
@@ -194,9 +199,11 @@ public class Sqlite  extends SQLiteOpenHelper {
             if(count > 0){
                 result = true;
             }
+            Log.i("SQLITE_CARTAO", "UPDATE executado. Linhas afetadas: " + count + ", result=" + result);
         }
 
         db.close();
+        Log.d("SQLITE_CARTAO", "=== tapCartao() finalizado. Retornando: " + result + " ===");
         return result;
     }
 
@@ -208,12 +215,16 @@ public class Sqlite  extends SQLiteOpenHelper {
         String ativoBanco = null;
         if (cursor != null && cursor.moveToFirst()) {
             ativoBanco = cursor.getString(cursor.getColumnIndexOrThrow("ativo"));
-            Log.d("a",ativoBanco);
+            Log.d("SQLITE_CARTAO", "Valor lido do banco: " + ativoBanco);
             cursor.close();
             if(ativoBanco.equals("1")){
+                Log.i("SQLITE_CARTAO", "Retornando true (cartão habilitado)");
                 return true;
             }
+        } else {
+            Log.w("SQLITE_CARTAO", "Nenhum registro encontrado na tabela tapCartao");
         }
+        Log.i("SQLITE_CARTAO", "Retornando false (cartão desabilitado)");
         return false;
 
     }
