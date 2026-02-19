@@ -59,6 +59,10 @@ public class Home extends AppCompatActivity {
     Float valorBase;
     Integer countClick = 0;
     private Button btnCalibrar;
+    
+    // ✅ NOVO: ExecutorService para gerenciar carregamento de imagem
+    private java.util.concurrent.ExecutorService imageExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private java.util.concurrent.Future<?> currentImageTask = null;
 
     private BluetoothStatusIndicator bluetoothStatusIndicator;
     private String mAndroidId;
@@ -221,34 +225,88 @@ public class Home extends AppCompatActivity {
         carregarImagem(imageUrl);
     }
     
+    /**
+     * ✅ CORRIGIDO: Carrega imagem com ExecutorService gerenciado
+     * 
+     * PROBLEMA ANTERIOR:
+     * - Thread não gerenciada causava StreamResetException: CANCEL
+     * - Requisição era cancelada quando Activity era destruída
+     * - Sem verificação de lifecycle
+     * 
+     * CORREÇÃO:
+     * - Usa ExecutorService para gerenciar threads
+     * - Cancela tarefa anterior se existir
+     * - Verifica se Activity ainda está ativa antes de atualizar UI
+     * - Logs detalhados para debug
+     * - Cleanup no onDestroy()
+     */
     private void carregarImagem(String url) {
         if (url == null || url.isEmpty()) {
             Log.w("HOME", "URL da imagem vazia ou nula");
             return;
         }
         
-        Log.d("HOME", "Carregando imagem: " + url);
+        Log.d("HOME", "=== INICIANDO CARREGAMENTO DE IMAGEM ===");
+        Log.d("HOME", "URL: " + url);
         
-        new Thread(() -> {
+        // Cancelar tarefa anterior se existir
+        if (currentImageTask != null && !currentImageTask.isDone()) {
+            Log.d("HOME", "Cancelando carregamento anterior de imagem");
+            currentImageTask.cancel(true);
+        }
+        
+        currentImageTask = imageExecutor.submit(() -> {
             try {
+                Log.d("HOME", "Thread iniciada para carregar imagem");
+                
+                // Verificar se thread foi interrompida
+                if (Thread.interrupted()) {
+                    Log.w("HOME", "⚠️ Thread interrompida antes de iniciar download");
+                    return;
+                }
+                
                 Tap tempTap = new Tap();
                 tempTap.image = url;
+                
+                Log.d("HOME", "Chamando ApiHelper.getImage()...");
                 Bitmap bmp = new ApiHelper().getImage(tempTap);
                 
+                // Verificar novamente se thread foi interrompida
+                if (Thread.interrupted()) {
+                    Log.w("HOME", "⚠️ Thread interrompida após download");
+                    return;
+                }
+                
                 if (bmp != null) {
+                    Log.i("HOME", "✅ Bitmap obtido com sucesso");
+                    Log.d("HOME", "Dimensões: " + bmp.getWidth() + "x" + bmp.getHeight());
+                    
                     runOnUiThread(() -> {
-                        if (imageView != null) {
-                            imageView.setImageBitmap(bmp);
-                            Log.d("HOME", "Imagem carregada com sucesso");
+                        // Verificar se Activity ainda está ativa
+                        if (!isFinishing() && !isDestroyed()) {
+                            if (imageView != null) {
+                                imageView.setImageBitmap(bmp);
+                                Log.i("HOME", "✅ Imagem definida no ImageView com sucesso");
+                            } else {
+                                Log.e("HOME", "❌ ImageView é null");
+                            }
+                        } else {
+                            Log.w("HOME", "⚠️ Activity destruída, não definindo imagem");
                         }
                     });
                 } else {
-                    Log.e("HOME", "Bitmap retornado é null");
+                    Log.e("HOME", "❌ Bitmap retornado é null");
+                    Log.e("HOME", "Verifique logs do ApiHelper para detalhes");
                 }
+            } catch (InterruptedException e) {
+                Log.w("HOME", "⚠️ Thread interrompida durante carregamento", e);
+                Thread.currentThread().interrupt();
             } catch (Exception e) {
-                Log.e("HOME", "Erro ao carregar imagem: " + e.getMessage(), e);
+                Log.e("HOME", "❌ Erro ao carregar imagem", e);
+                Log.e("HOME", "Tipo: " + e.getClass().getSimpleName());
+                Log.e("HOME", "Mensagem: " + e.getMessage());
             }
-        }).start();
+        });
     }
 
     public void updateValue(Float value) {
@@ -285,6 +343,31 @@ public class Home extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        
+        // ✅ NOVO: Cancelar carregamento de imagem e shutdown executor
+        Log.d("HOME", "onDestroy: Limpando recursos de carregamento de imagem");
+        
+        if (currentImageTask != null && !currentImageTask.isDone()) {
+            Log.d("HOME", "Cancelando tarefa de carregamento de imagem");
+            currentImageTask.cancel(true);
+        }
+        
+        if (imageExecutor != null && !imageExecutor.isShutdown()) {
+            Log.d("HOME", "Shutdown do imageExecutor");
+            imageExecutor.shutdown();
+            try {
+                // Aguardar até 2 segundos para tarefas terminarem
+                if (!imageExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                    Log.w("HOME", "Executor não terminou em 2s, forçando shutdownNow");
+                    imageExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Log.w("HOME", "Interrompido durante shutdown do executor", e);
+                imageExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+        
         if (mIsServiceBound) unbindService(mServiceConnection);
     }
 }
