@@ -148,7 +148,9 @@ public class ServiceTools extends AppCompatActivity {
                         // Nome da leitora
                         String nome = (status.leitora_nome != null && !status.leitora_nome.isEmpty())
                                 ? status.leitora_nome : "Não configurada";
-                        txtLeitoraNome.setText("Leitora: " + nome);
+                        String serialInfo = (status.serial != null && !status.serial.isEmpty())
+                                ? "\nSerial: " + status.serial : "";
+                        txtLeitoraNome.setText("Leitora: " + nome + serialInfo);
 
                         // Status online/offline
                         if ("online".equals(status.status_leitora)) {
@@ -208,6 +210,7 @@ public class ServiceTools extends AppCompatActivity {
             com.google.gson.JsonObject obj = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
             r.leitora_nome   = obj.has("leitora_nome")   ? obj.get("leitora_nome").getAsString()   : "";
             r.reader_id      = obj.has("reader_id")      ? obj.get("reader_id").getAsString()       : "";
+            r.serial         = obj.has("serial") && !obj.get("serial").isJsonNull() ? obj.get("serial").getAsString() : "";
             r.status_leitora = obj.has("status_leitora") ? obj.get("status_leitora").getAsString()  : "offline";
             r.api_ativa      = obj.has("api_ativa")      && obj.get("api_ativa").getAsBoolean();
             r.mensagem       = obj.has("mensagem")       ? obj.get("mensagem").getAsString()        : "";
@@ -223,6 +226,7 @@ public class ServiceTools extends AppCompatActivity {
     private static class ReaderStatusResponse {
         String leitora_nome   = "";
         String reader_id      = "";
+        String serial         = "";
         String status_leitora = "offline";
         boolean api_ativa     = false;
         String mensagem       = "";
