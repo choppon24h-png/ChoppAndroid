@@ -376,10 +376,27 @@ public class FormaPagamento extends AppCompatActivity {
                                 showErrorMessage("Erro ao gerar QR Code.");
                             }
                         } else {
+                            // Pagamento por cartao: mostrar instrucao e iniciar countdown de 180s
                             runOnUiThread(() -> {
-                                txtPreloader.setText("Insira ou aproxime o cartao no leitor SumUp Solo.");
-                                constraintLayout.setVisibility(View.VISIBLE);
+                                constraintLayout.setVisibility(View.INVISIBLE);
+                                // Ocultar botoes de escolha
+                                if (layoutBotoes != null) layoutBotoes.setVisibility(View.GONE);
+                                if (txtTituloForma != null) txtTituloForma.setVisibility(View.GONE);
+                                if (inputLayoutCpf != null) inputLayoutCpf.setVisibility(View.GONE);
+                                if (textView6 != null) textView6.setVisibility(View.GONE);
+                                // Mostrar instrucao, timer e barra de progresso
+                                cardQrCode.setVisibility(View.VISIBLE);
+                                TextView txtInfo = findViewById(R.id.txtInfo);
+                                if (txtInfo != null) {
+                                    txtInfo.setText("Insira ou aproxime o cartao no leitor SumUp Solo.");
+                                    txtInfo.setVisibility(View.VISIBLE);
+                                }
+                                findViewById(R.id.txtTimer).setVisibility(View.VISIBLE);
+                                ProgressBar pb = findViewById(R.id.progressBar2);
+                                if (pb != null) pb.setVisibility(View.VISIBLE);
+                                btnCancelarCredito.setVisibility(View.VISIBLE);
                             });
+                            startCountDown();
                             startVerifing(qr.checkout_id);
                         }
                     } else {
