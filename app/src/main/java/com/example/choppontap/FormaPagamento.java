@@ -73,18 +73,23 @@ public class FormaPagamento extends AppCompatActivity {
     private Button btnPix;
     private Button btnCard;
     private Button btnCardDebit;
-    private Button btnCancelarCredito;
+    private Button btnCancelarCartao; // ✅ CORRIGIDO: mudado de btnCancelarCredito para btnCancelarCartao
     private Button btnVoltar;
     private Button btnConfirmarPagamento;
     private String checkout_id = null;
     private CardView cardQrCode;
     private String quantidade;
     
-    // ✅ NOVO: Referências para ocultar elementos da escolha
+    // Referências para ocultar elementos da escolha
     private LinearLayout layoutBotoes;
     private TextView txtTituloForma;
     private View inputLayoutCpf;
-    private TextView textView6; // Label do CPF
+    private TextView textView6; 
+
+    // Novos elementos visuais para instrução de cartão
+    private LinearLayout layoutInstrucaoCartao;
+    private TextView txtTimerCartao;
+    private TextView txtSetaPiscando;
 
     private static final String TAG = "PAGAMENTO_DEBUG";
     private int retryCount = 0;
@@ -110,16 +115,20 @@ public class FormaPagamento extends AppCompatActivity {
         btnPix = findViewById(R.id.btnPix);
         btnCard = findViewById(R.id.btnCard);
         btnCardDebit = findViewById(R.id.btnCardDebit);
-        btnCancelarCredito = findViewById(R.id.btnCancelarCredito);
+        btnCancelarCartao = findViewById(R.id.btnCancelarCartao); // ✅ CORRIGIDO: mudado de btnCancelarCredito para btnCancelarCartao
         btnVoltar = findViewById(R.id.btnVoltar);
         btnConfirmarPagamento = findViewById(R.id.btnConfirmarPagamento);
         edt = findViewById(R.id.edtCpf);
         
-        // ✅ NOVO: Inicializando referências de UI
         layoutBotoes = findViewById(R.id.layoutBotoes);
         txtTituloForma = findViewById(R.id.txtTituloForma);
         inputLayoutCpf = findViewById(R.id.inputLayoutCpf);
         textView6 = findViewById(R.id.textView6);
+
+        // Referências para instrução de cartão
+        layoutInstrucaoCartao = findViewById(R.id.layoutInstrucaoCartao);
+        txtTimerCartao = findViewById(R.id.txtTimerCartao);
+        txtSetaPiscando = findViewById(R.id.txtSetaPiscando);
 
         if (textView6 != null) textView6.setText("Informe seu CPF para pontuar");
 
@@ -129,7 +138,7 @@ public class FormaPagamento extends AppCompatActivity {
         btnPix.setOnClickListener(v -> handlePaymentClick("pix"));
         btnCard.setOnClickListener(v -> handlePaymentClick("credit"));
         btnCardDebit.setOnClickListener(v -> handlePaymentClick("debit"));
-        btnCancelarCredito.setOnClickListener(v -> SendCardCancel());
+        btnCancelarCartao.setOnClickListener(v -> SendCardCancel()); // ✅ CORRIGIDO
         btnVoltar.setOnClickListener(v -> voltarParaHome());
         
         btnConfirmarPagamento.setOnClickListener(v -> {
@@ -246,7 +255,9 @@ public class FormaPagamento extends AppCompatActivity {
             findViewById(R.id.progressBar2).setVisibility(View.GONE);
             btnConfirmarPagamento.setVisibility(View.GONE);
             
-            // ✅ RESET: Mostrar botões novamente se necessário
+            if (layoutInstrucaoCartao != null) layoutInstrucaoCartao.setVisibility(View.GONE);
+            
+            // RESET: Mostrar botões novamente se necessário
             if (layoutBotoes != null) layoutBotoes.setVisibility(View.VISIBLE);
             if (txtTituloForma != null) txtTituloForma.setVisibility(View.VISIBLE);
             if (inputLayoutCpf != null) inputLayoutCpf.setVisibility(View.VISIBLE);
@@ -308,12 +319,9 @@ public class FormaPagamento extends AppCompatActivity {
                 retryCount = 0;
                 try (ResponseBody responseBody = response.body()) {
                     String json = responseBody != null ? responseBody.string() : "";
-
-                    // CORRECAO: log da resposta completa para diagnostico
                     Log.d(TAG, "Resposta create_order - HTTP " + response.code() + ": " + json);
 
                     if (!response.isSuccessful() || json.isEmpty()) {
-                        // CORRECAO: extrair mensagem de erro especifica da API
                         String errorMsg = "Erro no servidor. Tente novamente.";
                         String errorType = "";
                         if (!json.isEmpty()) {
@@ -329,20 +337,17 @@ public class FormaPagamento extends AppCompatActivity {
                                 Log.e(TAG, "Erro ao parsear resposta de erro: " + parseEx.getMessage());
                             }
                         }
-                        Log.e(TAG, "Erro na API - HTTP " + response.code()
-                                + " | Tipo: " + errorType
-                                + " | Mensagem: " + errorMsg);
-                        // CORRECAO: mensagem especifica por tipo de erro SumUp
+                        
                         final String finalErrorMsg;
                         switch (errorType) {
                             case "READER_OFFLINE":
-                                finalErrorMsg = "Leitor de cartao desligado. Verifique se o SumUp Solo esta ligado.";
+                                finalErrorMsg = "Leitor de cartão desligado. Verifique se o SumUp Solo está ligado.";
                                 break;
                             case "READER_BUSY":
-                                finalErrorMsg = "Leitor de cartao ocupado. Aguarde e tente novamente.";
+                                finalErrorMsg = "Leitor de cartão ocupado. Aguarde e tente novamente.";
                                 break;
                             case "NO_READER_CONFIGURED":
-                                finalErrorMsg = "Leitora de cartao nao configurada. Contate o suporte.";
+                                finalErrorMsg = "Leitora de cartão não configurada. Contate o suporte.";
                                 break;
                             default:
                                 finalErrorMsg = errorMsg;
@@ -355,7 +360,6 @@ public class FormaPagamento extends AppCompatActivity {
                     Qr qr = new Gson().fromJson(json, Qr.class);
                     if (qr != null && qr.checkout_id != null && !qr.checkout_id.isEmpty()) {
                         checkout_id = qr.checkout_id;
-                        Log.i(TAG, "Checkout criado com sucesso: " + checkout_id);
                         if (method.equals("pix")) {
                             if (qr.qr_code != null && !qr.qr_code.isEmpty()) {
                                 runOnUiThread(() -> {
@@ -364,48 +368,50 @@ public class FormaPagamento extends AppCompatActivity {
                                     if (txtTituloForma != null) txtTituloForma.setVisibility(View.GONE);
                                     if (inputLayoutCpf != null) inputLayoutCpf.setVisibility(View.GONE);
                                     if (textView6 != null) textView6.setVisibility(View.GONE);
-                                    cardQrCode.setVisibility(View.VISIBLE);
-                                    findViewById(R.id.txtTimer).setVisibility(View.VISIBLE);
-                                    findViewById(R.id.txtInfo).setVisibility(View.VISIBLE);
-                                    btnConfirmarPagamento.setVisibility(View.VISIBLE);
+                                    
+                                    findViewById(R.id.layoutQrPix).setVisibility(View.VISIBLE);
                                     updateQrCode(qr);
                                 });
-                                startCountDown();
-                                startVerifing(qr.checkout_id);
+                                startCountDown(180);
+                                startVerifing(qr.checkout_id, 180);
                             } else {
                                 showErrorMessage("Erro ao gerar QR Code.");
                             }
                         } else {
-                            // Pagamento por cartao: mostrar instrucao e iniciar countdown de 180s
+                            // Pagamento por cartão: mostrar instrução e iniciar countdown de 80s
                             runOnUiThread(() -> {
                                 constraintLayout.setVisibility(View.INVISIBLE);
-                                // Ocultar botoes de escolha
                                 if (layoutBotoes != null) layoutBotoes.setVisibility(View.GONE);
                                 if (txtTituloForma != null) txtTituloForma.setVisibility(View.GONE);
                                 if (inputLayoutCpf != null) inputLayoutCpf.setVisibility(View.GONE);
                                 if (textView6 != null) textView6.setVisibility(View.GONE);
-                                // Mostrar instrucao, timer e barra de progresso
-                                cardQrCode.setVisibility(View.VISIBLE);
-                                TextView txtInfo = findViewById(R.id.txtInfo);
-                                if (txtInfo != null) {
-                                    txtInfo.setText("Insira ou aproxime o cartao no leitor SumUp Solo.");
-                                    txtInfo.setVisibility(View.VISIBLE);
+                                
+                                if (layoutInstrucaoCartao != null) {
+                                    layoutInstrucaoCartao.setVisibility(View.VISIBLE);
+                                    startBlinkingSeta();
                                 }
-                                findViewById(R.id.txtTimer).setVisibility(View.VISIBLE);
-                                ProgressBar pb = findViewById(R.id.progressBar2);
-                                if (pb != null) pb.setVisibility(View.VISIBLE);
-                                btnCancelarCredito.setVisibility(View.VISIBLE);
                             });
-                            startCountDown();
-                            startVerifing(qr.checkout_id);
+                            startCountDown(80);
+                            startVerifing(qr.checkout_id, 80);
                         }
                     } else {
-                        Log.e(TAG, "Resposta invalida - checkout_id nulo. JSON: " + json);
-                        showErrorMessage("Dados de pagamento invalidos.");
+                        showErrorMessage("Dados de pagamento inválidos.");
                     }
                 } catch (Exception e) {
-                    Log.e(TAG, "Excecao ao processar resposta: " + e.getMessage());
                     showErrorMessage("Erro ao processar dados do servidor.");
+                }
+            }
+        });
+    }
+
+    private void startBlinkingSeta() {
+        if (txtSetaPiscando == null) return;
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (layoutInstrucaoCartao != null && layoutInstrucaoCartao.getVisibility() == View.VISIBLE) {
+                    txtSetaPiscando.setVisibility(txtSetaPiscando.getVisibility() == View.VISIBLE ? View.INVISIBLE : View.VISIBLE);
+                    handler.postDelayed(this, 500);
                 }
             }
         });
@@ -421,8 +427,7 @@ public class FormaPagamento extends AppCompatActivity {
                 @Override public void onResponse(Call call, Response response) throws IOException {}
             });
         }
-        resetPaymentState();
-        Toast.makeText(FormaPagamento.this, "Operação cancelada.", Toast.LENGTH_SHORT).show();
+        voltarParaHome(); // Forçar retorno para home
     }
 
     private void setupCpfMask() {
@@ -456,17 +461,18 @@ public class FormaPagamento extends AppCompatActivity {
         edt.requestFocus();
     }
 
-    public void startVerifing(String checkout_id) {
+    public void startVerifing(String checkout_id, int totalSeconds) {
         if (checkout_id == null || checkout_id.isEmpty()) return;
         this.checkout_id = checkout_id;
         final int delay = 5000;
+        final int maxIterations = totalSeconds / (delay / 1000);
+        
         runnable = new Runnable() {
             int i = 0;
             public void run() {
                 if (checkout_status) {
                     navigateToSuccess();
-                } else if (i >= 36) { // 180 segundos
-                    // ✅ NOVO: Retornar para home ao esgotar o tempo
+                } else if (i >= maxIterations) {
                     Log.w(TAG, "Tempo esgotado. Retornando para Home.");
                     voltarParaHome();
                 } else if (FormaPagamento.this.checkout_id == null) {
@@ -542,20 +548,25 @@ public class FormaPagamento extends AppCompatActivity {
         });
     }
 
-    public void startCountDown() {
+    public void startCountDown(int seconds) {
         runnableCountDown = new Runnable() {
             int i = 1;
             public void run() {
-                if (i <= 180) { 
+                if (i <= seconds) {
                     final int currentI = i;
                     runOnUiThread(() -> {
-                        ProgressBar pb = findViewById(R.id.progressBar2);
-                        TextView txtTimer = findViewById(R.id.txtTimer);
-                        if (pb != null) {
-                            pb.setVisibility(View.VISIBLE);
-                            pb.setProgress((currentI * 100) / 180);
+                        String timeStr = (seconds - currentI) + "s";
+                        if (txtTimerCartao != null && layoutInstrucaoCartao.getVisibility() == View.VISIBLE) {
+                            txtTimerCartao.setText(timeStr);
+                        } else {
+                            ProgressBar pb = findViewById(R.id.progressBar2);
+                            TextView txtTimer = findViewById(R.id.txtTimer);
+                            if (pb != null) {
+                                pb.setVisibility(View.VISIBLE);
+                                pb.setProgress((currentI * 100) / seconds);
+                            }
+                            if (txtTimer != null) txtTimer.setText(timeStr);
                         }
-                        if (txtTimer != null) txtTimer.setText((180 - currentI) + "s");
                     });
                     i++;
                     handlerCountDown.postDelayed(this, 1000);
