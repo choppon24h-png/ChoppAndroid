@@ -209,6 +209,39 @@
 
             </LinearLayout>
 
+            <!-- Bateria / Conexão / Firmware -->
+            <LinearLayout
+                android:id="@+id/layoutLeitoraDetalhes"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal"
+                android:visibility="gone">
+                <TextView
+                    android:id="@+id/txtLeitoraBateria"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Bat: --"
+                    android:textColor="#555555"
+                    android:textSize="13sp" />
+                <TextView
+                    android:id="@+id/txtLeitoraConexao"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Rede: --"
+                    android:textColor="#555555"
+                    android:textSize="13sp" />
+                <TextView
+                    android:id="@+id/txtLeitoraFirmware"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="FW: --"
+                    android:textColor="#555555"
+                    android:textSize="13sp" />
+            </LinearLayout>
             <!-- Mensagem de detalhes -->
             <TextView
                 android:id="@+id/txtLeitoraMensagem"
