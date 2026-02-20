@@ -58,7 +58,6 @@ public class Home extends AppCompatActivity {
     String android_id;
     Float valorBase;
     Integer countClick = 0;
-    private Button btnCalibrar;
     private ImageView logoChoppOn;
     private int secretClickCount = 0;
     
@@ -131,7 +130,6 @@ public class Home extends AppCompatActivity {
         btn300 = findViewById(R.id.btn300);
         btn500 = findViewById(R.id.btn500);
         btn700 = findViewById(R.id.btn700);
-        btnCalibrar = findViewById(R.id.btnCalibrar);
         logoChoppOn = findViewById(R.id.logoChoppOn);
 
         // ✅ ACESSO MASTER: 5 Clicks na Logo
@@ -150,11 +148,6 @@ public class Home extends AppCompatActivity {
         bluetoothStatusIndicator = new BluetoothStatusIndicator(statusContainer);
 
         changeButtons(false);
-
-        btnCalibrar.setOnClickListener(v -> {
-            if (countClick > 3) startActivity(new Intent(Home.this, CalibrarPulsos.class));
-            countClick++;
-        });
 
         btn100.setOnClickListener(v -> openIntent(1));
         btn300.setOnClickListener(v -> openIntent(3));
@@ -262,7 +255,9 @@ public class Home extends AppCompatActivity {
                     });
                 } else {
                     runOnUiThread(() -> {
-                        if (txtBebida != null) txtBebida.setText(bebida + " (Imagem não disponível)");
+                        if (txtBebida != null) {
+                            txtBebida.setText(bebida + " (Imagem não disponível)");
+                        }
                     });
                 }
             } catch (Exception e) {

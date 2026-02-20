@@ -30,22 +30,7 @@
         app:layout_constraintTop_toBottomOf="@+id/bluetooth_status_container"
         app:layout_constraintWidth_percent="0.6" />
 
-    <!-- Botão Calibrar -->
-    <Button
-        android:id="@+id/btnCalibrar"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:backgroundTint="@color/background"
-        android:padding="0dp"
-        android:visibility="visible"
-        app:cornerRadius="12dp"
-        app:icon="@mipmap/ic_support_foreground"
-        app:iconSize="32dp"
-        app:iconTint="@color/black"
-        app:layout_constraintBottom_toBottomOf="@+id/logoChoppOn"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.98"
-        app:layout_constraintTop_toTopOf="@+id/logoChoppOn" />
+    <!-- REMOVIDO: Botão Calibrar (Ícone de Ferramenta) -->
 
     <!-- Imagem da Bebida (Expandida para 16:9) -->
     <androidx.cardview.widget.CardView
@@ -111,7 +96,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/txtBebida" />
 
-    <!-- Grade de Botões Responsivos (Ajustam ao tamanho da tela) -->
+    <!-- Grade de Botões Responsivos -->
     <!-- Linha 1 -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btn100"
