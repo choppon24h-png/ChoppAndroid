@@ -360,6 +360,27 @@ public class FormaPagamento extends AppCompatActivity {
                     Qr qr = new Gson().fromJson(json, Qr.class);
                     if (qr != null && qr.checkout_id != null && !qr.checkout_id.isEmpty()) {
                         checkout_id = qr.checkout_id;
+
+                        // ═══════════════════════════════════════════════════════════
+                        // DEBUG: Identificação do leitor SumUp vinculado ao android_id
+                        // ═══════════════════════════════════════════════════════════
+                        Log.i("SUMUP_READER_DEBUG", "══════════════════════════════════════");
+                        Log.i("SUMUP_READER_DEBUG", "android_id    : " + android_id);
+                        Log.i("SUMUP_READER_DEBUG", "checkout_id   : " + qr.checkout_id);
+                        if (qr.reader_id != null) {
+                            Log.i("SUMUP_READER_DEBUG", "reader_id     : " + qr.reader_id);
+                        }
+                        if (qr.reader_name != null) {
+                            Log.i("SUMUP_READER_DEBUG", "reader_name   : " + qr.reader_name);
+                        }
+                        if (qr.reader_serial != null) {
+                            Log.i("SUMUP_READER_DEBUG", "reader_serial : " + qr.reader_serial);
+                            Log.i("SUMUP_READER_DEBUG", ">>> CHECKOUT ENVIADO PARA LEITORA SERIAL: " + qr.reader_serial + " <<<");
+                        } else {
+                            Log.w("SUMUP_READER_DEBUG", "reader_serial : NAO DISPONIVEL (checkout PIX ou reader sem serial)");
+                        }
+                        Log.i("SUMUP_READER_DEBUG", "══════════════════════════════════════");
+
                         if (method.equals("pix")) {
                             if (qr.qr_code != null && !qr.qr_code.isEmpty()) {
                                 runOnUiThread(() -> {
@@ -503,14 +524,29 @@ public class FormaPagamento extends AppCompatActivity {
         body.put("checkout_id", checkout_id);
 
         new ApiHelper().sendPost(body, "verify_checkout.php", new Callback() {
-            @Override public void onFailure(Call call, IOException e) {}
-            @Override public void onResponse(Call call, Response response) throws IOException {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.e("VERIFY_CHECKOUT", "Falha na requisição verify_checkout: " + e.getMessage());
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
                 try (ResponseBody responseBody = response.body()) {
-                    if (response.isSuccessful()) {
-                        CheckoutResponse cr = new Gson().fromJson(responseBody.string(), CheckoutResponse.class);
-                        if (cr != null && "success".equals(cr.status)) checkout_status = true;
+                    String json = responseBody != null ? responseBody.string() : "";
+                    Log.d("VERIFY_CHECKOUT", "HTTP " + response.code() + " | checkout_id=" + checkout_id + " | resp=" + json);
+                    if (response.isSuccessful() && !json.isEmpty()) {
+                        CheckoutResponse cr = new Gson().fromJson(json, CheckoutResponse.class);
+                        if (cr != null && "success".equals(cr.status)) {
+                            Log.i("VERIFY_CHECKOUT", ">>> PAGAMENTO APROVADO! checkout_id=" + checkout_id + " <<<");
+                            checkout_status = true;
+                        } else {
+                            String dbStatus = (cr != null && cr.checkout_status != null) ? cr.checkout_status : "PENDING";
+                            Log.d("VERIFY_CHECKOUT", "Aguardando pagamento... status_banco=" + dbStatus);
+                        }
                     }
-                } catch (Exception e) {}
+                } catch (Exception e) {
+                    Log.e("VERIFY_CHECKOUT", "Erro ao parsear verify_checkout: " + e.getMessage());
+                }
             }
         });
     }
