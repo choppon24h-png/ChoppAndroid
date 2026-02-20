@@ -37,6 +37,8 @@ import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.google.android.material.snackbar.Snackbar;
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -306,25 +308,62 @@ public class FormaPagamento extends AppCompatActivity {
                 retryCount = 0;
                 try (ResponseBody responseBody = response.body()) {
                     String json = responseBody != null ? responseBody.string() : "";
+
+                    // CORRECAO: log da resposta completa para diagnostico
+                    Log.d(TAG, "Resposta create_order - HTTP " + response.code() + ": " + json);
+
                     if (!response.isSuccessful() || json.isEmpty()) {
-                        showErrorMessage("Erro no servidor. Tente novamente.");
+                        // CORRECAO: extrair mensagem de erro especifica da API
+                        String errorMsg = "Erro no servidor. Tente novamente.";
+                        String errorType = "";
+                        if (!json.isEmpty()) {
+                            try {
+                                JsonObject jsonObj = JsonParser.parseString(json).getAsJsonObject();
+                                if (jsonObj.has("error")) {
+                                    errorMsg = jsonObj.get("error").getAsString();
+                                }
+                                if (jsonObj.has("error_type")) {
+                                    errorType = jsonObj.get("error_type").getAsString();
+                                }
+                            } catch (Exception parseEx) {
+                                Log.e(TAG, "Erro ao parsear resposta de erro: " + parseEx.getMessage());
+                            }
+                        }
+                        Log.e(TAG, "Erro na API - HTTP " + response.code()
+                                + " | Tipo: " + errorType
+                                + " | Mensagem: " + errorMsg);
+                        // CORRECAO: mensagem especifica por tipo de erro SumUp
+                        final String finalErrorMsg;
+                        switch (errorType) {
+                            case "READER_OFFLINE":
+                                finalErrorMsg = "Leitor de cartao desligado. Verifique se o SumUp Solo esta ligado.";
+                                break;
+                            case "READER_BUSY":
+                                finalErrorMsg = "Leitor de cartao ocupado. Aguarde e tente novamente.";
+                                break;
+                            case "NO_READER_CONFIGURED":
+                                finalErrorMsg = "Leitora de cartao nao configurada. Contate o suporte.";
+                                break;
+                            default:
+                                finalErrorMsg = errorMsg;
+                                break;
+                        }
+                        showErrorMessage(finalErrorMsg);
                         return;
                     }
 
                     Qr qr = new Gson().fromJson(json, Qr.class);
                     if (qr != null && qr.checkout_id != null && !qr.checkout_id.isEmpty()) {
                         checkout_id = qr.checkout_id;
+                        Log.i(TAG, "Checkout criado com sucesso: " + checkout_id);
                         if (method.equals("pix")) {
                             if (qr.qr_code != null && !qr.qr_code.isEmpty()) {
                                 runOnUiThread(() -> {
                                     constraintLayout.setVisibility(View.INVISIBLE);
-                                    
-                                    // ✅ NOVO: Ocultar CPF e Botões de escolha
                                     if (layoutBotoes != null) layoutBotoes.setVisibility(View.GONE);
                                     if (txtTituloForma != null) txtTituloForma.setVisibility(View.GONE);
                                     if (inputLayoutCpf != null) inputLayoutCpf.setVisibility(View.GONE);
                                     if (textView6 != null) textView6.setVisibility(View.GONE);
-                                    
                                     cardQrCode.setVisibility(View.VISIBLE);
                                     findViewById(R.id.txtTimer).setVisibility(View.VISIBLE);
                                     findViewById(R.id.txtInfo).setVisibility(View.VISIBLE);
@@ -338,15 +377,17 @@ public class FormaPagamento extends AppCompatActivity {
                             }
                         } else {
                             runOnUiThread(() -> {
-                                txtPreloader.setText("Insira ou aproxime o cartão.");
+                                txtPreloader.setText("Insira ou aproxime o cartao no leitor SumUp Solo.");
                                 constraintLayout.setVisibility(View.VISIBLE);
                             });
                             startVerifing(qr.checkout_id);
                         }
                     } else {
-                        showErrorMessage("Dados de pagamento inválidos.");
+                        Log.e(TAG, "Resposta invalida - checkout_id nulo. JSON: " + json);
+                        showErrorMessage("Dados de pagamento invalidos.");
                     }
                 } catch (Exception e) {
+                    Log.e(TAG, "Excecao ao processar resposta: " + e.getMessage());
                     showErrorMessage("Erro ao processar dados do servidor.");
                 }
             }
