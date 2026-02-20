@@ -251,7 +251,7 @@ public class FormaPagamento extends AppCompatActivity {
         body.put("valor", valor);
         body.put("quantidade", quantidade);
         body.put("descricao", descricao);
-        body.put("payment_method", method);
+        body.put("payment_method", method); // ✅ CORRIGIDO: mudado de "method" para "payment_method"
 
         runOnUiThread(() -> {
             constraintLayout.setVisibility(View.VISIBLE);
