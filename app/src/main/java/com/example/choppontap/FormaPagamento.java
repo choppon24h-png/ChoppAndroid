@@ -24,6 +24,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -72,9 +73,16 @@ public class FormaPagamento extends AppCompatActivity {
     private Button btnCardDebit;
     private Button btnCancelarCredito;
     private Button btnVoltar;
+    private Button btnConfirmarPagamento;
     private String checkout_id = null;
     private CardView cardQrCode;
     private String quantidade;
+    
+    // ✅ NOVO: Referências para ocultar elementos da escolha
+    private LinearLayout layoutBotoes;
+    private TextView txtTituloForma;
+    private View inputLayoutCpf;
+    private TextView textView6; // Label do CPF
 
     private static final String TAG = "PAGAMENTO_DEBUG";
     private int retryCount = 0;
@@ -102,10 +110,16 @@ public class FormaPagamento extends AppCompatActivity {
         btnCardDebit = findViewById(R.id.btnCardDebit);
         btnCancelarCredito = findViewById(R.id.btnCancelarCredito);
         btnVoltar = findViewById(R.id.btnVoltar);
+        btnConfirmarPagamento = findViewById(R.id.btnConfirmarPagamento);
         edt = findViewById(R.id.edtCpf);
+        
+        // ✅ NOVO: Inicializando referências de UI
+        layoutBotoes = findViewById(R.id.layoutBotoes);
+        txtTituloForma = findViewById(R.id.txtTituloForma);
+        inputLayoutCpf = findViewById(R.id.inputLayoutCpf);
+        textView6 = findViewById(R.id.textView6);
 
-        TextView txtCpfLabel = findViewById(R.id.textView6);
-        if (txtCpfLabel != null) txtCpfLabel.setText("Informe seu CPF para pontuar");
+        if (textView6 != null) textView6.setText("Informe seu CPF para pontuar");
 
         setupFullscreen();
         setupCpfMask();
@@ -115,6 +129,13 @@ public class FormaPagamento extends AppCompatActivity {
         btnCardDebit.setOnClickListener(v -> handlePaymentClick("debit"));
         btnCancelarCredito.setOnClickListener(v -> SendCardCancel());
         btnVoltar.setOnClickListener(v -> voltarParaHome());
+        
+        btnConfirmarPagamento.setOnClickListener(v -> {
+            if (checkout_id != null) {
+                Toast.makeText(this, "Verificando pagamento...", Toast.LENGTH_SHORT).show();
+                verifyPayment(checkout_id);
+            }
+        });
     }
 
     @Override
@@ -195,7 +216,6 @@ public class FormaPagamento extends AppCompatActivity {
             Bundle extras = getIntent().getExtras();
             if (extras == null) return;
 
-            // Formatação definitiva do valor para evitar problemas com vírgulas/ponto
             Object valorObj = extras.get("valor");
             String valorFormatado;
             if (valorObj instanceof Float || valorObj instanceof Double) {
@@ -222,6 +242,14 @@ public class FormaPagamento extends AppCompatActivity {
             findViewById(R.id.txtTimer).setVisibility(View.GONE);
             findViewById(R.id.txtInfo).setVisibility(View.GONE);
             findViewById(R.id.progressBar2).setVisibility(View.GONE);
+            btnConfirmarPagamento.setVisibility(View.GONE);
+            
+            // ✅ RESET: Mostrar botões novamente se necessário
+            if (layoutBotoes != null) layoutBotoes.setVisibility(View.VISIBLE);
+            if (txtTituloForma != null) txtTituloForma.setVisibility(View.VISIBLE);
+            if (inputLayoutCpf != null) inputLayoutCpf.setVisibility(View.VISIBLE);
+            if (textView6 != null) textView6.setVisibility(View.VISIBLE);
+            
             changeButtonsFunction(true);
         });
     }
@@ -238,10 +266,9 @@ public class FormaPagamento extends AppCompatActivity {
     }
 
     public void sendRequest(String valor, String descricao, String quantidade, String cpf, String method) {
-        // ✅ NOVO: Gerar CPF padrão válido quando vazio
         String cpfFinal = CpfMask.unmask(cpf);
         if (cpfFinal == null || cpfFinal.trim().isEmpty()) {
-            cpfFinal = "11144477735";  // CPF padrão válido (111.444.777-35)
+            cpfFinal = "11144477735";
             Log.d(TAG, "CPF vazio, usando CPF padrão: " + cpfFinal);
         }
         
@@ -251,7 +278,7 @@ public class FormaPagamento extends AppCompatActivity {
         body.put("valor", valor);
         body.put("quantidade", quantidade);
         body.put("descricao", descricao);
-        body.put("payment_method", method); // ✅ CORRIGIDO: mudado de "method" para "payment_method"
+        body.put("payment_method", method);
 
         runOnUiThread(() -> {
             constraintLayout.setVisibility(View.VISIBLE);
@@ -263,57 +290,50 @@ public class FormaPagamento extends AppCompatActivity {
             @Override
             public void onFailure(Call call, IOException e) {
                 Log.e(TAG, "Falha na requisição create_order: " + e.getMessage());
-                
-                // ✅ NOVO: Retry automático com backoff exponencial
                 if (retryCount < MAX_RETRIES) {
                     retryCount++;
-                    int delay = (int) Math.pow(2, retryCount) * 1000;  // 2s, 4s, 8s
-                    
-                    Log.w(TAG, "Tentando novamente em " + delay + "ms (" + retryCount + "/" + MAX_RETRIES + ")");
-                    
-                    runOnUiThread(() -> {
-                        txtPreloader.setText("Tentando novamente (" + retryCount + "/" + MAX_RETRIES + ")...");
-                    });
-                    
-                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                        sendRequest(valor, descricao, quantidade, cpf, method);
-                    }, delay);
+                    int delay = (int) Math.pow(2, retryCount) * 1000;
+                    runOnUiThread(() -> txtPreloader.setText("Tentando novamente (" + retryCount + "/" + MAX_RETRIES + ")..."));
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> sendRequest(valor, descricao, quantidade, cpf, method), delay);
                 } else {
                     retryCount = 0;
-                    Log.e(TAG, "Falha após " + MAX_RETRIES + " tentativas");
                     showErrorMessage("Falha de rede após múltiplas tentativas. Verifique a conexão.");
                 }
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
-                retryCount = 0;  // ✅ Reset retry count em caso de sucesso
+                retryCount = 0;
                 try (ResponseBody responseBody = response.body()) {
                     String json = responseBody != null ? responseBody.string() : "";
-                    Log.d(TAG, "Resposta create_order: " + json);
-
                     if (!response.isSuccessful() || json.isEmpty()) {
-                        Log.e(TAG, "Erro HTTP ou corpo vazio: " + response.code());
                         showErrorMessage("Erro no servidor. Tente novamente.");
                         return;
                     }
 
                     Qr qr = new Gson().fromJson(json, Qr.class);
-
                     if (qr != null && qr.checkout_id != null && !qr.checkout_id.isEmpty()) {
+                        checkout_id = qr.checkout_id;
                         if (method.equals("pix")) {
                             if (qr.qr_code != null && !qr.qr_code.isEmpty()) {
                                 runOnUiThread(() -> {
                                     constraintLayout.setVisibility(View.INVISIBLE);
+                                    
+                                    // ✅ NOVO: Ocultar CPF e Botões de escolha
+                                    if (layoutBotoes != null) layoutBotoes.setVisibility(View.GONE);
+                                    if (txtTituloForma != null) txtTituloForma.setVisibility(View.GONE);
+                                    if (inputLayoutCpf != null) inputLayoutCpf.setVisibility(View.GONE);
+                                    if (textView6 != null) textView6.setVisibility(View.GONE);
+                                    
                                     cardQrCode.setVisibility(View.VISIBLE);
                                     findViewById(R.id.txtTimer).setVisibility(View.VISIBLE);
                                     findViewById(R.id.txtInfo).setVisibility(View.VISIBLE);
+                                    btnConfirmarPagamento.setVisibility(View.VISIBLE);
                                     updateQrCode(qr);
                                 });
                                 startCountDown();
                                 startVerifing(qr.checkout_id);
                             } else {
-                                Log.e(TAG, "QR Code nulo ou vazio no JSON");
                                 showErrorMessage("Erro ao gerar QR Code.");
                             }
                         } else {
@@ -324,11 +344,9 @@ public class FormaPagamento extends AppCompatActivity {
                             startVerifing(qr.checkout_id);
                         }
                     } else {
-                        Log.e(TAG, "checkout_id inválido na resposta JSON");
                         showErrorMessage("Dados de pagamento inválidos.");
                     }
                 } catch (Exception e) {
-                    Log.e(TAG, "Erro ao processar JSON: " + e.getMessage());
                     showErrorMessage("Erro ao processar dados do servidor.");
                 }
             }
@@ -389,8 +407,10 @@ public class FormaPagamento extends AppCompatActivity {
             public void run() {
                 if (checkout_status) {
                     navigateToSuccess();
-                } else if (i >= 6) { // 30 segundos
-                    showErrorMessage("Tempo esgotado. Tente novamente.");
+                } else if (i >= 36) { // 180 segundos
+                    // ✅ NOVO: Retornar para home ao esgotar o tempo
+                    Log.w(TAG, "Tempo esgotado. Retornando para Home.");
+                    voltarParaHome();
                 } else if (FormaPagamento.this.checkout_id == null) {
                     Log.d(TAG, "Monitoramento parado.");
                 } else {
@@ -468,16 +488,16 @@ public class FormaPagamento extends AppCompatActivity {
         runnableCountDown = new Runnable() {
             int i = 1;
             public void run() {
-                if (i <= 30) {
+                if (i <= 180) { 
                     final int currentI = i;
                     runOnUiThread(() -> {
                         ProgressBar pb = findViewById(R.id.progressBar2);
                         TextView txtTimer = findViewById(R.id.txtTimer);
                         if (pb != null) {
                             pb.setVisibility(View.VISIBLE);
-                            pb.setProgress((currentI * 100) / 30);
+                            pb.setProgress((currentI * 100) / 180);
                         }
-                        if (txtTimer != null) txtTimer.setText((30 - currentI) + "s");
+                        if (txtTimer != null) txtTimer.setText((180 - currentI) + "s");
                     });
                     i++;
                     handlerCountDown.postDelayed(this, 1000);

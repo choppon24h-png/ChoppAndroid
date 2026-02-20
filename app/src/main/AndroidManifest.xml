@@ -72,6 +72,18 @@
             android:screenOrientation="reversePortrait"
             android:theme="@style/Theme.ChoppOnTap" />
 
+        <activity
+            android:name=".AcessoMaster"
+            android:exported="false"
+            android:screenOrientation="reversePortrait"
+            android:theme="@style/Theme.ChoppOnTap" />
+
+        <activity
+            android:name=".ServiceTools"
+            android:exported="false"
+            android:screenOrientation="reversePortrait"
+            android:theme="@style/Theme.ChoppOnTap" />
+
         <service
             android:name=".BluetoothService"
             android:enabled="true" />

@@ -226,7 +226,7 @@
         android:id="@+id/txtTimer"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="30s"
+        android:text="180s"
         android:textColor="@color/text_primary"
         android:textSize="24sp"
         android:textStyle="bold"
@@ -254,7 +254,7 @@
         android:id="@+id/cardQrCode"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        android:layout_marginBottom="8dp"
+        android:layout_marginBottom="100dp"
         android:backgroundTint="@color/text_primary"
         android:visibility="gone"
         app:cardCornerRadius="16dp"
@@ -274,6 +274,23 @@
             android:scaleType="fitCenter" />
 
     </androidx.cardview.widget.CardView>
+
+    <!-- Botão Confirmar Pagamento -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnConfirmarPagamento"
+        android:layout_width="0dp"
+        android:layout_height="60dp"
+        android:layout_marginTop="8dp"
+        android:backgroundTint="@color/choppon_orange"
+        android:text="CONFIRMAR PAGAMENTO"
+        android:textColor="@color/white"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:cornerRadius="12dp"
+        app:layout_constraintEnd_toEndOf="@+id/cardQrCode"
+        app:layout_constraintStart_toStartOf="@+id/cardQrCode"
+        app:layout_constraintTop_toBottomOf="@+id/cardQrCode" />
 
     <!-- Overlay de Loading -->
     <androidx.constraintlayout.widget.ConstraintLayout

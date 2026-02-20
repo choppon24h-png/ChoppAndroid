@@ -59,8 +59,10 @@ public class Home extends AppCompatActivity {
     Float valorBase;
     Integer countClick = 0;
     private Button btnCalibrar;
+    private ImageView logoChoppOn;
+    private int secretClickCount = 0;
     
-    // ✅ NOVO: ExecutorService para gerenciar carregamento de imagem
+    // ✅ ExecutorService para gerenciar carregamento de imagem
     private java.util.concurrent.ExecutorService imageExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
     private java.util.concurrent.Future<?> currentImageTask = null;
 
@@ -102,7 +104,6 @@ public class Home extends AppCompatActivity {
         setupFullscreen();
         android_id = Secure.getString(this.getContentResolver(), Secure.ANDROID_ID);
 
-        // Inicializa a UI primeiro para evitar NullPointerException
         setupUI();
 
         Bundle extras = getIntent().getExtras();
@@ -111,19 +112,12 @@ public class Home extends AppCompatActivity {
             valorBase = extras.getFloat("preco", 0.0f);
             imagemUrl = extras.getString("imagem");
             
-            // ✅ NOVO: Processar extra "cartao" e salvar no banco
             boolean cartaoHabilitado = extras.getBoolean("cartao", false);
-            Log.d("HOME_LIFECYCLE", "Extra cartao recebido: " + cartaoHabilitado);
-            
-            // Salvar no banco para uso no FormaPagamento
             Sqlite banco = new Sqlite(getApplicationContext());
-            boolean salvou = banco.tapCartao(cartaoHabilitado);
-            Log.d("HOME_LIFECYCLE", "Cartao salvo no banco: " + salvou + " (valor: " + cartaoHabilitado + ")");
+            banco.tapCartao(cartaoHabilitado);
 
-            Log.d("HOME_LIFECYCLE", "Dados recebidos da Intent. Atualizando UI.");
             updateFields(bebida, valorBase, imagemUrl);
         } else {
-            Log.w("HOME_LIFECYCLE", "Sem dados na Intent. Verificando via API...");
             sendRequestCheckSecurity();
         }
 
@@ -138,11 +132,24 @@ public class Home extends AppCompatActivity {
         btn500 = findViewById(R.id.btn500);
         btn700 = findViewById(R.id.btn700);
         btnCalibrar = findViewById(R.id.btnCalibrar);
+        logoChoppOn = findViewById(R.id.logoChoppOn);
+
+        // ✅ ACESSO MASTER: 5 Clicks na Logo
+        logoChoppOn.setOnClickListener(v -> {
+            secretClickCount++;
+            if (secretClickCount >= 5) {
+                secretClickCount = 0;
+                startActivity(new Intent(Home.this, AcessoMaster.class));
+            }
+            // Resetar contagem após 2 segundos de inatividade
+            handler.removeCallbacksAndMessages("secret_timer");
+            handler.postAtTime(() -> secretClickCount = 0, "secret_timer", android.os.SystemClock.uptimeMillis() + 2000);
+        });
 
         LinearLayout statusContainer = findViewById(R.id.bluetooth_status_container);
         bluetoothStatusIndicator = new BluetoothStatusIndicator(statusContainer);
 
-        changeButtons(false); // Desabilita botões até conectar
+        changeButtons(false);
 
         btnCalibrar.setOnClickListener(v -> {
             if (countClick > 3) startActivity(new Intent(Home.this, CalibrarPulsos.class));
@@ -167,14 +174,9 @@ public class Home extends AppCompatActivity {
                         if (tap == null || tap.bebida == null || tap.bebida.isEmpty()) {
                             redirecionarImei();
                         } else {
-                            // ✅ NOVO: Processar cartao da API e salvar no banco
                             boolean cartaoHabilitado = (tap.cartao != null) && tap.cartao;
-                            Log.d("HOME_API", "Cartao recebido da API: " + cartaoHabilitado);
-                            
                             Sqlite banco = new Sqlite(getApplicationContext());
-                            boolean salvou = banco.tapCartao(cartaoHabilitado);
-                            Log.d("HOME_API", "Cartao salvo no banco: " + salvou + " (valor: " + cartaoHabilitado + ")");
-                            
+                            banco.tapCartao(cartaoHabilitado);
                             runOnUiThread(() -> updateFields(tap.bebida, tap.preco, tap.image));
                         }
                     } else {
@@ -242,82 +244,35 @@ public class Home extends AppCompatActivity {
         carregarImagem(imageUrl);
     }
     
-    /**
-     * ✅ CORRIGIDO: Carrega imagem com ExecutorService gerenciado
-     */
     private void carregarImagem(String url) {
-        if (url == null || url.isEmpty()) {
-            Log.w("HOME", "URL da imagem vazia ou nula");
-            return;
-        }
-        
-        Log.d("HOME", "=== INICIANDO CARREGAMENTO DE IMAGEM ===");
-        Log.d("HOME", "URL: " + url);
-        
-        // Cancelar tarefa anterior se existir
-        if (currentImageTask != null && !currentImageTask.isDone()) {
-            Log.d("HOME", "Cancelando carregamento anterior de imagem");
-            currentImageTask.cancel(true);
-        }
+        if (url == null || url.isEmpty()) return;
+        if (currentImageTask != null && !currentImageTask.isDone()) currentImageTask.cancel(true);
         
         currentImageTask = imageExecutor.submit(() -> {
             try {
-                Log.d("HOME", "Thread iniciada para carregar imagem");
-                
-                // Verificar se thread foi interrompida
-                if (Thread.currentThread().isInterrupted()) {
-                    Log.w("HOME", "⚠️ Thread interrompida antes de iniciar download");
-                    return;
-                }
-                
                 Tap tempTap = new Tap();
                 tempTap.image = url;
-                
-                Log.d("HOME", "Chamando ApiHelper.getImage()...");
                 Bitmap bmp = new ApiHelper().getImage(tempTap);
                 
-                // Verificar novamente se thread foi interrompida
-                if (Thread.currentThread().isInterrupted()) {
-                    Log.w("HOME", "⚠️ Thread interrompida após download");
-                    return;
-                }
-                
                 if (bmp != null) {
-                    Log.i("HOME", "✅ Bitmap obtido com sucesso");
-                    Log.d("HOME", "Dimensões: " + bmp.getWidth() + "x" + bmp.getHeight());
-                    
                     runOnUiThread(() -> {
-                        // Verificar se Activity ainda está ativa
                         if (!isFinishing() && !isDestroyed()) {
-                            if (imageView != null) {
-                                imageView.setImageBitmap(bmp);
-                                Log.i("HOME", "✅ Imagem definida no ImageView com sucesso");
-                            } else {
-                                Log.e("HOME", "❌ ImageView é null");
-                            }
-                        } else {
-                            Log.w("HOME", "⚠️ Activity destruída, não definindo imagem");
+                            if (imageView != null) imageView.setImageBitmap(bmp);
                         }
                     });
                 } else {
-                    Log.e("HOME", "❌ Bitmap retornado é null");
-                    // FALLBACK: Informar que a imagem não carregou na UI se necessário
                     runOnUiThread(() -> {
-                        if (txtBebida != null) {
-                            txtBebida.setText(bebida + " (Imagem não disponível)");
-                        }
+                        if (txtBebida != null) txtBebida.setText(bebida + " (Imagem não disponível)");
                     });
                 }
             } catch (Exception e) {
-                Log.e("HOME", "❌ Erro ao carregar imagem", e);
-                Log.e("HOME", "Tipo: " + e.getClass().getSimpleName());
-                Log.e("HOME", "Mensagem: " + e.getMessage());
+                Log.e("HOME", "Erro ao carregar imagem: " + e.getMessage());
             }
         });
     }
 
     public void updateValue(Float value) {
-        if (btn100 == null) return; // UI não pronta
+        if (btn100 == null) return;
         float val = (value != null) ? value : 0f;
         btn100.setText("100 ml \nR$ " + String.format("%.2f", val).replace(".", ","));
         btn300.setText("300 ml \nR$ " + String.format("%.2f", val * 3).replace(".", ","));
@@ -326,7 +281,7 @@ public class Home extends AppCompatActivity {
     }
 
     public void changeButtons(Boolean enabled) {
-        if (btn100 == null) return; // UI não pronta
+        if (btn100 == null) return;
         int color = enabled ? Color.WHITE : Color.GRAY;
         btn100.setEnabled(enabled); btn100.setTextColor(color);
         btn300.setEnabled(enabled); btn300.setTextColor(color);
@@ -337,6 +292,7 @@ public class Home extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        secretClickCount = 0;
         IntentFilter filter = new IntentFilter(BluetoothService.ACTION_CONNECTION_STATUS);
         LocalBroadcastManager.getInstance(this).registerReceiver(mServiceUpdateReceiver, filter);
     }
@@ -350,31 +306,8 @@ public class Home extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        
-        // ✅ NOVO: Cancelar carregamento de imagem e shutdown executor
-        Log.d("HOME", "onDestroy: Limpando recursos de carregamento de imagem");
-        
-        if (currentImageTask != null && !currentImageTask.isDone()) {
-            Log.d("HOME", "Cancelando tarefa de carregamento de imagem");
-            currentImageTask.cancel(true);
-        }
-        
-        if (imageExecutor != null && !imageExecutor.isShutdown()) {
-            Log.d("HOME", "Shutdown do imageExecutor");
-            imageExecutor.shutdown();
-            try {
-                // Aguardar até 2 segundos para tarefas terminarem
-                if (!imageExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
-                    Log.w("HOME", "Executor não terminou em 2s, forçando shutdownNow");
-                    imageExecutor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                Log.w("HOME", "Interrompido durante shutdown do executor", e);
-                imageExecutor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-        }
-        
+        if (currentImageTask != null) currentImageTask.cancel(true);
+        imageExecutor.shutdown();
         if (mIsServiceBound) unbindService(mServiceConnection);
     }
 }
