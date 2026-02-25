@@ -2,6 +2,12 @@
 /**
  * API - Cancelar Pedido
  * POST /api/cancel_order.php
+ *
+ * Cancela um checkout pendente na SumUp e marca o pedido como CANCELLED.
+ *
+ * Campos obrigatórios (POST):
+ *   - android_id  : string
+ *   - checkout_id : string
  */
 
 header('Content-Type: application/json');
@@ -9,18 +15,18 @@ require_once '../includes/config.php';
 require_once '../includes/jwt.php';
 require_once '../includes/sumup.php';
 
+// ── Autenticação JWT ──────────────────────────────────────────
 $headers = getallheaders();
-$token = $headers['token'] ?? $headers['Token'] ?? '';
+$token   = $headers['token'] ?? $headers['Token'] ?? '';
 
-// Validar token
 if (!jwtValidate($token)) {
     http_response_code(401);
     echo json_encode(['error' => 'Token inválido']);
     exit;
 }
 
-$input = $_POST;
-$checkout_id = $input['checkout_id'] ?? '';
+$input       = $_POST;
+$checkout_id = trim($input['checkout_id'] ?? '');
 
 if (empty($checkout_id)) {
     http_response_code(400);
@@ -30,16 +36,16 @@ if (empty($checkout_id)) {
 
 $conn = getDBConnection();
 
-// Buscar pedido
+// ── Buscar pedido ─────────────────────────────────────────────
 $stmt = $conn->prepare("
-    SELECT o.*, t.reader_id 
+    SELECT o.id, o.method, o.checkout_status, t.reader_id
     FROM `order` o
     INNER JOIN tap t ON o.tap_id = t.id
     WHERE o.checkout_id = ?
     LIMIT 1
 ");
 $stmt->execute([$checkout_id]);
-$order = $stmt->fetch();
+$order = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$order) {
     http_response_code(404);
@@ -47,25 +53,36 @@ if (!$order) {
     exit;
 }
 
-$sumup = new SumUpIntegration();
+Logger::info('cancel_order: cancelando pedido', [
+    'checkout_id' => $checkout_id,
+    'order_id'    => $order['id'],
+    'method'      => $order['method'],
+]);
+
+// ── Cancelar na SumUp ─────────────────────────────────────────
+$sumup     = new SumUpIntegration();
 $cancelled = false;
 
-// Cancelar na SumUp
-if ($order['method'] === 'pix') {
-    $cancelled = $sumup->cancelPixTransaction($checkout_id);
-} else {
-    if (!empty($order['reader_id'])) {
-        $cancelled = $sumup->cancelCardTransaction($order['reader_id']);
-    }
+// Para todos os tipos de pagamento, cancelar o checkout pelo checkout_id
+if (!in_array($order['checkout_status'], ['SUCCESSFUL', 'CANCELLED', 'FAILED'])) {
+    $cancelled = $sumup->cancelCheckout($checkout_id);
+    Logger::info('cancel_order: resultado cancelamento SumUp', [
+        'checkout_id' => $checkout_id,
+        'cancelled'   => $cancelled,
+    ]);
 }
 
-// Atualizar status do pedido
+// ── Atualizar banco ───────────────────────────────────────────
 $stmt = $conn->prepare("
-    UPDATE `order` 
-    SET checkout_status = 'CANCELLED', status_liberacao = 'CANCELLED'
+    UPDATE `order`
+    SET checkout_status = 'CANCELLED'
     WHERE id = ?
 ");
 $stmt->execute([$order['id']]);
 
 http_response_code(200);
-echo json_encode(['success' => true, 'cancelled_at_sumup' => $cancelled]);
+echo json_encode([
+    'success'           => true,
+    'cancelled_at_sumup'=> $cancelled,
+    'order_id'          => $order['id'],
+]);
