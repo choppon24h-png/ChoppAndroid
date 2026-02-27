@@ -434,8 +434,8 @@ class SumUpIntegration
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => json_encode($body),
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT        => 20,  // Reduzido de 30s para 20s
+            CURLOPT_CONNECTTIMEOUT => 8,
             CURLOPT_HTTPHEADER     => [
                 'Authorization: Bearer ' . $this->token,
                 'Content-Type: application/json',

@@ -264,11 +264,10 @@ try {
         exit;
     }
 
-    // Buscar nome e serial da leitora para retornar ao app
+      // ── Buscar nome/serial da leitora (SOMENTE do banco — sem chamar API extra para não atrasar) ──
     $reader_name   = null;
     $reader_serial = null;
     try {
-        // Tentar tabela readers primeiro
         $stmtReader = $conn->prepare("SELECT name, serial FROM readers WHERE reader_id = ? LIMIT 1");
         $stmtReader->execute([$tap['reader_id']]);
         $readerRow = $stmtReader->fetch(PDO::FETCH_ASSOC);
@@ -277,21 +276,20 @@ try {
             $reader_serial = $readerRow['serial'] ?? null;
         }
     } catch (Exception $e) {
-        // Tabela readers pode não existir — buscar via API
-        Logger::debug('create_order: tabela readers não disponível, buscando via API', []);
+        // Tabela readers pode não existir — não bloqueia o fluxo
+        Logger::debug('create_order: tabela readers não disponível', []);
     }
-
-    // Se não encontrou no banco, buscar via SumUp API
+    // Se não encontrou no banco, usar o reader_id como fallback (sem chamar API extra)
     if (empty($reader_name)) {
-        try {
-            $readerStatus = $sumup->getReaderStatus($tap['reader_id']);
-            $reader_name   = $readerStatus['reader_name'] ?? null;
-            $reader_serial = $readerStatus['reader_serial'] ?? null;
-        } catch (Exception $e) {
-            Logger::warning('create_order: falha ao buscar reader via API', ['error' => $e->getMessage()]);
-        }
+        $reader_name   = 'Leitora ' . substr($tap['reader_id'], -6);
+        $reader_serial = null;
     }
-
+    Logger::debug('create_order: iniciando checkout cartão', [
+        'reader_id'    => $tap['reader_id'],
+        'reader_name'  => $reader_name,
+        'card_type'    => $payment_method,
+        'valor'        => $input['valor'],
+    ]);
     // Enviar checkout para a leitora via Cloud API
     $result = $sumup->createCheckoutCard($order_data, $tap['reader_id'], $payment_method);
 

@@ -338,8 +338,11 @@ public class FormaPagamento extends AppCompatActivity {
             @Override
             public void onResponse(Call call, Response response) throws IOException {
                 retryCount = 0;
+                // 🔥 LOG IMEDIATO - confirma que onResponse foi chamado
+                Log.d(TAG, "✅ [CREATE_ORDER] onResponse! HTTP=" + response.code() + " success=" + response.isSuccessful());
                 try (ResponseBody responseBody = response.body()) {
                     String json = responseBody != null ? responseBody.string() : "";
+                    Log.d(TAG, "📦 [CREATE_ORDER] Corpo (" + json.length() + " chars): " + (json.length() > 300 ? json.substring(0, 300) + "..." : json));
                     
                     // ✅ TRATAMENTO SENIOR PARA ERRO 500 E DEBUG
                     if (!response.isSuccessful()) {
