@@ -8,8 +8,14 @@
  * Referência: https://developer.sumup.com/terminal-payments/cloud-api
  * Affiliate Keys: https://developer.sumup.com/tools/authorization/affiliate-keys/
  *
- * Versão: 2.0.0
+ * Versão: 2.1.0
  * Compatível com: chopponERP + ChoppAndroid
+ *
+ * CORREÇÕES v2.1.0:
+ *  - Token sempre carregado do config.php como fonte primária (SUMUP_TOKEN)
+ *  - affiliate_key e affiliate_app_id carregados do banco COM fallback para config.php
+ *  - getReaderStatus: exibe bateria/conexão mesmo quando status=OFFLINE mas state=IDLE
+ *  - isApiActive: log detalhado do motivo da falha
  */
 
 class SumUpIntegration
@@ -22,36 +28,38 @@ class SumUpIntegration
 
     public function __construct()
     {
-        $conn = getDBConnection();
+        // ── Fonte 1: Constantes do config.php (mais confiável, sempre disponível) ──
+        $this->token          = defined('SUMUP_TOKEN')          ? SUMUP_TOKEN          : '';
+        $this->merchantCode   = defined('SUMUP_MERCHANT_CODE')  ? SUMUP_MERCHANT_CODE  : '';
+        $this->affiliateKey   = defined('SUMUP_AFFILIATE_KEY')  ? SUMUP_AFFILIATE_KEY  : '';
+        $this->affiliateAppId = defined('SUMUP_AFFILIATE_APP_ID') ? SUMUP_AFFILIATE_APP_ID : '';
 
-        // Buscar configurações do banco de dados
-        $stmt = $conn->query("SELECT * FROM payment LIMIT 1");
-        $cfg  = $stmt->fetch(PDO::FETCH_ASSOC);
+        // ── Fonte 2: Banco de dados (sobrescreve se preenchido) ──────────────────
+        try {
+            $conn = getDBConnection();
+            $stmt = $conn->query("SELECT * FROM payment LIMIT 1");
+            $cfg  = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        $this->token          = $cfg['token_sumup']      ?? '';
-        $this->merchantCode   = $cfg['merchant_code']    ?? (defined('SUMUP_MERCHANT_CODE') ? SUMUP_MERCHANT_CODE : '');
-        $this->affiliateKey   = $cfg['affiliate_key']    ?? '';
-        $this->affiliateAppId = $cfg['affiliate_app_id'] ?? '';
-
-        // Fallback para constantes do config.php
-        if (empty($this->token) && defined('SUMUP_TOKEN')) {
-            $this->token = SUMUP_TOKEN;
-        }
-        if (empty($this->merchantCode) && defined('SUMUP_MERCHANT_CODE')) {
-            $this->merchantCode = SUMUP_MERCHANT_CODE;
-        }
-        if (empty($this->affiliateKey) && defined('SUMUP_AFFILIATE_KEY')) {
-            $this->affiliateKey = SUMUP_AFFILIATE_KEY;
-        }
-        if (empty($this->affiliateAppId) && defined('SUMUP_AFFILIATE_APP_ID')) {
-            $this->affiliateAppId = SUMUP_AFFILIATE_APP_ID;
+            if ($cfg) {
+                // Só sobrescreve se o valor do banco não estiver vazio
+                if (!empty($cfg['token_sumup']))      $this->token          = $cfg['token_sumup'];
+                if (!empty($cfg['merchant_code']))    $this->merchantCode   = $cfg['merchant_code'];
+                if (!empty($cfg['affiliate_key']))    $this->affiliateKey   = $cfg['affiliate_key'];
+                if (!empty($cfg['affiliate_app_id'])) $this->affiliateAppId = $cfg['affiliate_app_id'];
+            }
+        } catch (Exception $e) {
+            Logger::warning('SumUpIntegration: falha ao carregar config do banco', [
+                'error' => $e->getMessage(),
+            ]);
         }
 
         Logger::debug('SumUpIntegration inicializada', [
             'merchant_code'     => $this->merchantCode,
             'has_token'         => !empty($this->token),
+            'token_prefix'      => !empty($this->token) ? substr($this->token, 0, 12) . '...' : 'VAZIO',
             'has_affiliate_key' => !empty($this->affiliateKey),
             'has_app_id'        => !empty($this->affiliateAppId),
+            'affiliate_app_id'  => $this->affiliateAppId ?: 'NAO_CONFIGURADO',
         ]);
     }
 
@@ -82,11 +90,11 @@ class SumUpIntegration
             return false;
         }
         if (empty($this->affiliateKey)) {
-            Logger::error('SumUp: affiliate_key não configurada');
+            Logger::error('SumUp: affiliate_key não configurada — configure em Pagamentos > Affiliate Key');
             return false;
         }
         if (empty($this->affiliateAppId)) {
-            Logger::error('SumUp: affiliate_app_id não configurado');
+            Logger::error('SumUp: affiliate_app_id não configurado — configure em Pagamentos > Affiliate App ID');
             return false;
         }
 
@@ -98,16 +106,17 @@ class SumUpIntegration
 
         // Montar corpo da requisição conforme documentação SumUp Cloud API
         $body = [
-            'total_price'            => (float) $order['valor'],
-            'currency'               => 'BRL',
-            'pay_to_email'           => '',           // Opcional — preenchido automaticamente pela SumUp
-            'description'            => $order['descricao'] ?? 'Pagamento ChoppOn',
-            'foreign_transaction_id' => 'CHOPPON-' . $order['id'] . '-' . time(),
-            'affiliate'              => [
+            'checkout_reference' => 'CHOPPON-' . strtoupper($card_type) . '-' . $order['id'] . '-' . time(),
+            'amount'             => (float) $order['valor'],
+            'currency'           => 'BRL',
+            'description'        => $order['descricao'] ?? 'Pagamento ChoppOn',
+            'merchant_code'      => $this->merchantCode,
+            'reader_id'          => $reader_id,
+            'card_type'          => $card_type,
+            'affiliate'          => [
                 'key'    => $this->affiliateKey,
                 'app_id' => $this->affiliateAppId,
             ],
-            'card_type'              => $card_type,  // 'debit' ou 'credit'
         ];
 
         $url = "{$this->baseUrl}/v0.1/merchants/{$this->merchantCode}/readers/{$reader_id}/checkout";
@@ -118,46 +127,38 @@ class SumUpIntegration
             'card_type' => $card_type,
             'valor'     => $order['valor'],
             'order_id'  => $order['id'],
+            'app_id'    => $this->affiliateAppId,
         ]);
 
         $response = $this->httpPost($url, $body);
 
         Logger::info('SumUp createCheckoutCard - resposta', [
             'http_code'  => $response['http_code'],
-            'body_short' => substr($response['body'], 0, 300),
+            'body_short' => substr($response['body'], 0, 400),
         ]);
 
-        if ($response['http_code'] === 200 || $response['http_code'] === 201) {
-            $data = json_decode($response['body'], true);
+        if (in_array($response['http_code'], [200, 201])) {
+            $data        = json_decode($response['body'], true);
             $checkout_id = $data['id'] ?? $data['checkout_id'] ?? null;
 
             if ($checkout_id) {
                 return [
                     'checkout_id' => $checkout_id,
-                    'response'    => $response['body'],
                     'card_type'   => $card_type,
-                    'reader_id'   => $reader_id,
+                    'response'    => $response['body'],
                 ];
             }
         }
 
-        // Tratar erros conhecidos
-        $error_data = json_decode($response['body'], true);
-        $error_msg  = $error_data['message'] ?? $error_data['error_message'] ?? $response['body'];
-
         Logger::error('SumUp createCheckoutCard - falhou', [
             'http_code' => $response['http_code'],
-            'error'     => $error_msg,
+            'body'      => substr($response['body'], 0, 400),
             'reader_id' => $reader_id,
             'card_type' => $card_type,
         ]);
 
         return false;
     }
-
-    // =========================================================
-    // CHECKOUT PIX (API REST SumUp)
-    // =========================================================
 
     /**
      * Cria um checkout PIX via SumUp
@@ -177,7 +178,7 @@ class SumUpIntegration
             'amount'             => (float) $order['valor'],
             'currency'           => 'BRL',
             'description'        => $order['descricao'] ?? 'Pagamento ChoppOn PIX',
-            'pay_to_email'       => '',
+            'pay_to_email'       => defined('SUMUP_PAY_TO_EMAIL') ? SUMUP_PAY_TO_EMAIL : '',
         ];
 
         $url = "{$this->baseUrl}/v0.1/checkouts";
@@ -198,12 +199,19 @@ class SumUpIntegration
         if ($response['http_code'] === 200 || $response['http_code'] === 201) {
             $data        = json_decode($response['body'], true);
             $checkout_id = $data['id'] ?? null;
-            $pix_code    = $data['transaction_code'] ?? $data['pix_code'] ?? null;
+
+            // A SumUp retorna o código PIX em transaction_code ou pix_code
+            $pix_code = $data['transaction_code'] ?? $data['pix_code'] ?? null;
+
+            // Se não tiver pix_code, usar o checkout_id como fallback para gerar QR
+            if (empty($pix_code)) {
+                $pix_code = $checkout_id;
+            }
 
             if ($checkout_id) {
                 return [
                     'checkout_id' => $checkout_id,
-                    'pix_code'    => $pix_code ?? $checkout_id,
+                    'pix_code'    => $pix_code,
                     'response'    => $response['body'],
                 ];
             }
@@ -225,22 +233,29 @@ class SumUpIntegration
      * Consulta o status de uma leitora SumUp Solo via Cloud API
      *
      * @param string $reader_id  ID da leitora (ex: rdr_XXXX)
-     * @return array             Status da leitora
+     * @return array             Status da leitora com todos os campos
      */
     public function getReaderStatus(string $reader_id): array
     {
         if (empty($this->token) || empty($this->merchantCode) || empty($reader_id)) {
             return [
-                'status'  => 'UNKNOWN',
-                'state'   => null,
-                'battery' => null,
-                'wifi'    => null,
-                'error'   => 'Configuração incompleta',
+                'status'   => 'UNKNOWN',
+                'state'    => null,
+                'is_ready' => false,
+                'battery'  => null,
+                'wifi'     => null,
+                'error'    => 'Configuração incompleta (token ou merchant_code ausente)',
             ];
         }
 
         $url      = "{$this->baseUrl}/v0.1/merchants/{$this->merchantCode}/readers/{$reader_id}";
         $response = $this->httpGet($url);
+
+        Logger::debug('SumUp getReaderStatus', [
+            'reader_id' => $reader_id,
+            'http_code' => $response['http_code'],
+            'body_short' => substr($response['body'], 0, 300),
+        ]);
 
         if ($response['http_code'] === 200) {
             $data = json_decode($response['body'], true);
@@ -253,8 +268,11 @@ class SumUpIntegration
             $battery    = $statusData['battery_level'] ?? null;
             $firmware   = $statusData['firmware_version'] ?? null;
             $lastAct    = $statusData['last_activity'] ?? null;
+            $battTemp   = $statusData['battery_temperature'] ?? null;
 
-            // Lógica de prontidão: IDLE + conexão = pronto para transacionar
+            // Lógica de prontidão corrigida:
+            // - ONLINE/CONNECTED/READY = pronto
+            // - state=IDLE + qualquer conexão = pronto (caso do SumUp Solo na tela "Pronto")
             $readyStatuses = ['ONLINE', 'CONNECTED', 'READY', 'READY_TO_TRANSACT'];
             $activeStates  = ['IDLE', 'READY', 'PROCESSING', 'CARD_INSERTED', 'CARD_TAPPED', 'PIN_ENTRY'];
             $hasNetwork    = !empty($connType);
@@ -262,17 +280,36 @@ class SumUpIntegration
             $isReady = in_array($rawStatus, $readyStatuses)
                     || ($hasNetwork && in_array($state, $activeStates));
 
+            Logger::info('SumUp getReaderStatus - resultado', [
+                'reader_id'  => $reader_id,
+                'raw_status' => $rawStatus,
+                'state'      => $state,
+                'connection' => $connType,
+                'battery'    => $battery,
+                'is_ready'   => $isReady,
+            ]);
+
             return [
                 'status'        => $rawStatus,
                 'state'         => $state,
                 'is_ready'      => $isReady,
                 'battery'       => $battery,
+                'battery_temp'  => $battTemp,
                 'connection'    => $connType,
                 'firmware'      => $firmware,
                 'last_activity' => $lastAct,
                 'reader_name'   => $data['name'] ?? null,
                 'reader_serial' => $data['device']['identifier'] ?? null,
                 'paired_status' => $data['status'] ?? null,
+            ];
+        }
+
+        if ($response['http_code'] === 404) {
+            return [
+                'status'   => 'NOT_FOUND',
+                'state'    => null,
+                'is_ready' => false,
+                'error'    => 'Leitora não encontrada (404)',
             ];
         }
 
@@ -346,13 +383,22 @@ class SumUpIntegration
     public function isApiActive(): bool
     {
         if (empty($this->token)) {
+            Logger::warning('SumUp isApiActive: token vazio');
             return false;
         }
 
         $url      = "{$this->baseUrl}/v0.1/me";
         $response = $this->httpGet($url);
 
-        return $response['http_code'] === 200;
+        $active = $response['http_code'] === 200;
+
+        Logger::debug('SumUp isApiActive', [
+            'http_code'    => $response['http_code'],
+            'active'       => $active,
+            'token_prefix' => substr($this->token, 0, 12) . '...',
+        ]);
+
+        return $active;
     }
 
     /**
@@ -470,10 +516,15 @@ if (!function_exists('generateQRCode')) {
      * Usa a API QR Server (sem dependência externa)
      *
      * @param string $text  Texto ou URL para o QR Code
-     * @return string       Base64 da imagem PNG
+     * @return string       Base64 da imagem PNG, ou string vazia em caso de falha
      */
     function generateQRCode(string $text): string
     {
+        if (empty($text)) {
+            Logger::warning('generateQRCode: texto vazio');
+            return '';
+        }
+
         $url = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' . urlencode($text);
 
         $ch = curl_init($url);
@@ -482,16 +533,28 @@ if (!function_exists('generateQRCode')) {
             CURLOPT_TIMEOUT        => 10,
             CURLOPT_CONNECTTIMEOUT => 5,
             CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_FOLLOWLOCATION => true,
         ]);
 
         $imageData = curl_exec($ch);
+        $httpCode  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
         curl_close($ch);
 
-        if ($imageData && strlen($imageData) > 100) {
+        if ($curlError) {
+            Logger::error('generateQRCode: cURL error', ['error' => $curlError, 'text_len' => strlen($text)]);
+            return '';
+        }
+
+        if ($imageData && strlen($imageData) > 100 && $httpCode === 200) {
+            Logger::debug('generateQRCode: sucesso', ['size_bytes' => strlen($imageData)]);
             return base64_encode($imageData);
         }
 
-        Logger::warning('generateQRCode: falhou ao gerar QR Code', ['text_len' => strlen($text)]);
+        Logger::warning('generateQRCode: falhou ao gerar QR Code', [
+            'http_code' => $httpCode,
+            'text_len'  => strlen($text),
+        ]);
         return '';
     }
 }

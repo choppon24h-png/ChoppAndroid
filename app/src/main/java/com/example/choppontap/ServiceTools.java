@@ -75,13 +75,18 @@ public class ServiceTools extends AppCompatActivity {
 
         android_id = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
 
+        Log.d(TAG, "ServiceTools iniciado | android_id=" + android_id);
+
         loadSystemInfo();
         loadReaderStatus();
 
         btnCalibrarPulsos.setOnClickListener(v -> startActivity(new Intent(this, CalibrarPulsos.class)));
         btnTempoAbertura.setOnClickListener(v -> startActivity(new Intent(this, ModificarTimeout.class)));
         btnSairTools.setOnClickListener(v -> finish());
-        btnAtualizarLeitora.setOnClickListener(v -> loadReaderStatus());
+        btnAtualizarLeitora.setOnClickListener(v -> {
+            Log.d(TAG, "Botão Atualizar Leitora clicado");
+            loadReaderStatus();
+        });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -106,6 +111,8 @@ public class ServiceTools extends AppCompatActivity {
     // Status da Leitora de Cartão SumUp
     // ─────────────────────────────────────────────────────────────
     private void loadReaderStatus() {
+        Log.d(TAG, "loadReaderStatus: iniciando consulta ao backend");
+
         runOnUiThread(() -> {
             progressLeitora.setVisibility(View.VISIBLE);
             btnAtualizarLeitora.setEnabled(false);
@@ -126,18 +133,18 @@ public class ServiceTools extends AppCompatActivity {
         new ApiHelper().sendPost(body, "reader_status.php", new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                Log.e(TAG, "Falha ao consultar status da leitora: " + e.getMessage());
+                Log.e(TAG, "Falha de rede ao consultar reader_status.php: " + e.getMessage());
                 runOnUiThread(() -> {
                     progressLeitora.setVisibility(View.GONE);
                     btnAtualizarLeitora.setEnabled(true);
                     txtLeitoraNome.setText("Leitora: Erro de conexão");
-                    txtLeitoraStatus.setText("Erro");
+                    txtLeitoraStatus.setText("ERRO");
                     txtLeitoraStatus.setTextColor(Color.parseColor("#F44336"));
                     viewStatusDot.setBackgroundResource(R.drawable.circle_red);
-                    txtApiStatus.setText("Indisponível");
+                    txtApiStatus.setText("INDISPONÍVEL");
                     txtApiStatus.setTextColor(Color.parseColor("#F44336"));
                     viewApiDot.setBackgroundResource(R.drawable.circle_red);
-                    txtLeitoraMensagem.setText("Falha de rede ao consultar a API. Verifique a conexão.");
+                    txtLeitoraMensagem.setText("Falha de rede ao consultar a API. Verifique a conexão do tablet.");
                 });
             }
 
@@ -145,9 +152,18 @@ public class ServiceTools extends AppCompatActivity {
             public void onResponse(Call call, Response response) throws IOException {
                 try (ResponseBody responseBody = response.body()) {
                     String json = responseBody != null ? responseBody.string() : "{}";
-                    Log.d(TAG, "Reader status response: " + json);
+                    Log.d(TAG, "Reader status response (HTTP " + response.code() + "): " + json);
 
                     ReaderStatusResponse status = parseReaderStatus(json);
+
+                    Log.d(TAG, "Reader status parsed:"
+                            + " nome=" + status.leitora_nome
+                            + " serial=" + status.serial
+                            + " status=" + status.status_leitora
+                            + " api_ativa=" + status.api_ativa
+                            + " bateria=" + status.bateria
+                            + " conexao=" + status.conexao
+                            + " firmware=" + status.firmware);
 
                     runOnUiThread(() -> {
                         progressLeitora.setVisibility(View.GONE);
@@ -160,53 +176,83 @@ public class ServiceTools extends AppCompatActivity {
                                 ? "\nSerial: " + status.serial : "";
                         txtLeitoraNome.setText("Leitora: " + nome + serialInfo);
 
-                        // ── Status Online / Offline ───────────────────────────
+                        // ── Status: online / idle / offline / sem_leitora ─────
+                        // NOVO: "idle" = dispositivo pronto (state=IDLE + Wi-Fi)
+                        //       mesmo que status=OFFLINE na API SumUp
                         switch (status.status_leitora) {
                             case "online":
-                                txtLeitoraStatus.setText("ONLINE");
+                                txtLeitoraStatus.setText("● ONLINE");
+                                txtLeitoraStatus.setTextColor(Color.parseColor("#4CAF50"));
+                                viewStatusDot.setBackgroundResource(R.drawable.circle_green);
+                                break;
+                            case "idle":
+                                // Dispositivo pronto para transacionar (tela "Pronto" no SumUp Solo)
+                                txtLeitoraStatus.setText("● PRONTO");
                                 txtLeitoraStatus.setTextColor(Color.parseColor("#4CAF50"));
                                 viewStatusDot.setBackgroundResource(R.drawable.circle_green);
                                 break;
                             case "offline":
-                                txtLeitoraStatus.setText("OFFLINE");
+                                txtLeitoraStatus.setText("● OFFLINE");
                                 txtLeitoraStatus.setTextColor(Color.parseColor("#F44336"));
                                 viewStatusDot.setBackgroundResource(R.drawable.circle_red);
                                 break;
-                            case "sem_leitora":
                             case "nao_encontrada":
-                                txtLeitoraStatus.setText("NÃO CONFIGURADA");
+                                txtLeitoraStatus.setText("● NÃO ENCONTRADA");
+                                txtLeitoraStatus.setTextColor(Color.parseColor("#FF8C00"));
+                                viewStatusDot.setBackgroundResource(R.drawable.circle_gray);
+                                break;
+                            case "sem_leitora":
+                                txtLeitoraStatus.setText("● NÃO CONFIGURADA");
                                 txtLeitoraStatus.setTextColor(Color.parseColor("#FF8C00"));
                                 viewStatusDot.setBackgroundResource(R.drawable.circle_gray);
                                 break;
                             default:
-                                txtLeitoraStatus.setText("DESCONHECIDO");
+                                txtLeitoraStatus.setText("● DESCONHECIDO");
                                 txtLeitoraStatus.setTextColor(Color.parseColor("#888888"));
                                 viewStatusDot.setBackgroundResource(R.drawable.circle_gray);
                         }
 
                         // ── API SumUp ─────────────────────────────────────────
                         if (status.api_ativa) {
-                            txtApiStatus.setText("ATIVA");
+                            txtApiStatus.setText("● ATIVA");
                             txtApiStatus.setTextColor(Color.parseColor("#4CAF50"));
                             viewApiDot.setBackgroundResource(R.drawable.circle_green);
                         } else {
-                            txtApiStatus.setText("INATIVA / TOKEN INVÁLIDO");
+                            txtApiStatus.setText("● INATIVA / TOKEN INVÁLIDO");
                             txtApiStatus.setTextColor(Color.parseColor("#F44336"));
                             viewApiDot.setBackgroundResource(R.drawable.circle_red);
                         }
 
-                        // ── Bateria / Conexão / Firmware (só se online) ───────
-                        if ("online".equals(status.status_leitora)) {
+                        // ── Bateria / Conexão / Firmware ──────────────────────
+                        // CORREÇÃO: exibir detalhes para online E idle E offline
+                        // (quando há dados disponíveis, mesmo que status=OFFLINE)
+                        boolean temDados = (status.bateria != null && !status.bateria.isEmpty())
+                                || (status.conexao != null && !status.conexao.isEmpty())
+                                || (status.firmware != null && !status.firmware.isEmpty());
+
+                        boolean deveExibir = "online".equals(status.status_leitora)
+                                || "idle".equals(status.status_leitora)
+                                || ("offline".equals(status.status_leitora) && temDados);
+
+                        if (deveExibir) {
                             layoutLeitoraDetalhes.setVisibility(View.VISIBLE);
-                            txtLeitoraBateria.setText("Bat: " +
-                                    (status.bateria != null && !status.bateria.isEmpty() ? status.bateria : "--"));
-                            txtLeitoraConexao.setText("Rede: " +
-                                    (status.conexao != null && !status.conexao.isEmpty()
-                                            ? status.conexao.toUpperCase() : "--"));
-                            txtLeitoraFirmware.setText("FW: " +
-                                    (status.firmware != null && !status.firmware.isEmpty() ? status.firmware : "--"));
+
+                            String batStr = (status.bateria != null && !status.bateria.isEmpty())
+                                    ? status.bateria : "--";
+                            String conStr = (status.conexao != null && !status.conexao.isEmpty())
+                                    ? status.conexao.toUpperCase() : "--";
+                            String fwStr  = (status.firmware != null && !status.firmware.isEmpty())
+                                    ? status.firmware : "--";
+
+                            txtLeitoraBateria.setText("Bat: " + batStr);
+                            txtLeitoraConexao.setText("Rede: " + conStr);
+                            txtLeitoraFirmware.setText("FW: " + fwStr);
+
+                            Log.d(TAG, "Detalhes leitora exibidos: bat=" + batStr
+                                    + " rede=" + conStr + " fw=" + fwStr);
                         } else {
                             layoutLeitoraDetalhes.setVisibility(View.GONE);
+                            Log.d(TAG, "Detalhes leitora ocultados (sem dados ou sem_leitora)");
                         }
 
                         // ── Mensagem de diagnóstico ───────────────────────────
@@ -216,12 +262,12 @@ public class ServiceTools extends AppCompatActivity {
                     });
 
                 } catch (Exception e) {
-                    Log.e(TAG, "Erro ao processar resposta: " + e.getMessage());
+                    Log.e(TAG, "Erro ao processar resposta reader_status: " + e.getMessage(), e);
                     runOnUiThread(() -> {
                         progressLeitora.setVisibility(View.GONE);
                         btnAtualizarLeitora.setEnabled(true);
                         txtLeitoraNome.setText("Leitora: Erro ao processar");
-                        txtLeitoraMensagem.setText("Erro interno ao interpretar a resposta da API.");
+                        txtLeitoraMensagem.setText("Erro interno ao interpretar a resposta da API: " + e.getMessage());
                     });
                 }
             }
@@ -239,13 +285,18 @@ public class ServiceTools extends AppCompatActivity {
             r.reader_id      = obj.has("reader_id")      && !obj.get("reader_id").isJsonNull()      ? obj.get("reader_id").getAsString()       : "";
             r.serial         = obj.has("serial")         && !obj.get("serial").isJsonNull()         ? obj.get("serial").getAsString()          : "";
             r.status_leitora = obj.has("status_leitora") && !obj.get("status_leitora").isJsonNull() ? obj.get("status_leitora").getAsString()  : "offline";
-            r.api_ativa      = obj.has("api_ativa")      && obj.get("api_ativa").getAsBoolean();
+            r.api_ativa      = obj.has("api_ativa")      && !obj.get("api_ativa").isJsonNull()      && obj.get("api_ativa").getAsBoolean();
             r.bateria        = obj.has("bateria")        && !obj.get("bateria").isJsonNull()        ? obj.get("bateria").getAsString()         : "";
             r.conexao        = obj.has("conexao")        && !obj.get("conexao").isJsonNull()        ? obj.get("conexao").getAsString()         : "";
             r.firmware       = obj.has("firmware")       && !obj.get("firmware").isJsonNull()       ? obj.get("firmware").getAsString()        : "";
             r.mensagem       = obj.has("mensagem")       && !obj.get("mensagem").isJsonNull()       ? obj.get("mensagem").getAsString()        : "";
+
+            // Log do debug retornado pelo backend
+            if (obj.has("debug") && !obj.get("debug").isJsonNull()) {
+                Log.d(TAG, "Backend debug: " + obj.get("debug").toString());
+            }
         } catch (Exception e) {
-            Log.e(TAG, "Erro parse JSON: " + e.getMessage());
+            Log.e(TAG, "Erro parse JSON reader_status: " + e.getMessage() + " | JSON: " + json);
         }
         return r;
     }

@@ -6,9 +6,14 @@
  * Retorna o status da leitora SumUp Solo vinculada à TAP (android_id).
  * Usado pelo app Android (ServiceTools.java) para exibir:
  *   - Nome e serial da leitora
- *   - Status online/offline
+ *   - Status online/offline/idle
  *   - API SumUp ativa/inativa
  *   - Bateria, tipo de conexão, firmware, última atividade
+ *
+ * CORREÇÃO v2.1.0:
+ *   - Exibe bateria/conexão mesmo quando status=OFFLINE mas state=IDLE
+ *   - status_leitora="idle" quando state=IDLE + conexão ativa (dispositivo pronto)
+ *   - Melhor diagnóstico de falha de token
  *
  * Campos POST:
  *   - android_id : string (obrigatório)
@@ -18,13 +23,14 @@
  *   "leitora_nome":     "TAP 01 ALMEIDA",
  *   "reader_id":        "rdr_XXXX",
  *   "serial":           "200300102578",
- *   "status_leitora":   "online|offline|sem_leitora|nao_encontrada",
+ *   "status_leitora":   "online|idle|offline|sem_leitora|nao_encontrada",
  *   "api_ativa":        true|false,
  *   "bateria":          "99.6%",
  *   "conexao":          "Wi-Fi",
  *   "firmware":         "3.3.39.2",
  *   "ultima_atividade": "2026-02-25T00:25:13Z",
- *   "mensagem":         "..."
+ *   "mensagem":         "...",
+ *   "debug":            { ... }
  * }
  */
 
@@ -80,7 +86,7 @@ if (!$tap) {
         'conexao'          => null,
         'firmware'         => null,
         'ultima_atividade' => null,
-        'mensagem'         => 'TAP não encontrada para este dispositivo.',
+        'mensagem'         => 'TAP não encontrada para este dispositivo. Verifique o cadastro no painel.',
     ]);
     exit;
 }
@@ -116,12 +122,27 @@ $apiAtiva = $sumup->isApiActive();
 $rs = $sumup->getReaderStatus($reader_id);
 
 // ── Determinar status simplificado ───────────────────────────
-// is_ready = true quando: status ONLINE/CONNECTED/READY ou state=IDLE+conexão ativa
+// Três estados possíveis:
+//   online  = status ONLINE/CONNECTED/READY (sessão Cloud API ativa)
+//   idle    = state=IDLE + conexão ativa (dispositivo pronto, tela "Pronto")
+//   offline = sem conexão ou sem estado ativo
 $statusLeitora = 'offline';
+
 if (!empty($rs['error']) && strpos($rs['error'], '404') !== false) {
     $statusLeitora = 'nao_encontrada';
 } elseif (!empty($rs['is_ready'])) {
-    $statusLeitora = 'online';
+    // is_ready=true cobre tanto ONLINE quanto IDLE+Wi-Fi
+    $state     = $rs['state'] ?? '';
+    $connType  = $rs['connection'] ?? '';
+    $rawStatus = $rs['status'] ?? '';
+
+    $readyStatuses = ['ONLINE', 'CONNECTED', 'READY', 'READY_TO_TRANSACT'];
+    if (in_array($rawStatus, $readyStatuses)) {
+        $statusLeitora = 'online';
+    } else {
+        // state=IDLE + conexão = idle (pronto para transacionar)
+        $statusLeitora = 'idle';
+    }
 }
 
 // ── Formatar bateria ──────────────────────────────────────────
@@ -131,21 +152,26 @@ if ($rs['battery'] !== null && $rs['battery'] !== '') {
 }
 
 // ── Montar mensagem de diagnóstico ────────────────────────────
-$mensagem = '';
+$state    = $rs['state'] ?? '';
+$connType = $rs['connection'] ?? '';
+
 if ($statusLeitora === 'online') {
-    $conn_type = $rs['connection'] ?? 'Wi-Fi';
-    $mensagem  = "Leitora pronta para transacionar via {$conn_type}.";
+    $mensagem = "Leitora pronta para transacionar via {$connType}.";
+} elseif ($statusLeitora === 'idle') {
+    $mensagem = "Dispositivo pronto (state: {$state}, rede: {$connType}). Pagamento habilitado.";
 } elseif ($statusLeitora === 'offline') {
-    $state    = $rs['state'] ?? '';
-    $connType = $rs['connection'] ?? '';
     if (!empty($connType) && !empty($state)) {
         $mensagem = "Dispositivo conectado via {$connType} (state: {$state}). "
                   . "Se o display mostrar 'Pronto', o pagamento funcionará normalmente.";
+    } elseif (!$apiAtiva) {
+        $mensagem = "API SumUp inativa. Verifique se o token está correto no painel de Pagamentos.";
     } else {
         $mensagem = "Leitora OFFLINE. Verifique se o SumUp Solo está ligado e conectado à internet.";
     }
 } elseif ($statusLeitora === 'nao_encontrada') {
     $mensagem = "Leitora não encontrada na conta SumUp. Verifique se o reader_id está correto.";
+} else {
+    $mensagem = "Status desconhecido. Tente atualizar.";
 }
 
 // ── Nome da leitora: usar o retornado pela SumUp ou o nome da TAP ─
@@ -160,6 +186,7 @@ Logger::info('reader_status: resposta enviada', [
     'state'          => $rs['state'] ?? 'N/A',
     'connection'     => $rs['connection'] ?? 'N/A',
     'battery'        => $bateria,
+    'is_ready'       => $rs['is_ready'] ?? false,
 ]);
 
 http_response_code(200);
@@ -174,4 +201,12 @@ echo json_encode([
     'firmware'         => $rs['firmware'] ?? null,
     'ultima_atividade' => $rs['last_activity'] ?? null,
     'mensagem'         => $mensagem,
+    // Debug adicional para diagnóstico
+    'debug' => [
+        'raw_status'   => $rs['status'] ?? null,
+        'state'        => $rs['state'] ?? null,
+        'is_ready'     => $rs['is_ready'] ?? false,
+        'battery_temp' => $rs['battery_temp'] ?? null,
+        'tap_id'       => $tap['id'],
+    ],
 ]);

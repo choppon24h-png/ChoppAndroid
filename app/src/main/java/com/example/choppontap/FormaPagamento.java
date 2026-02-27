@@ -198,17 +198,80 @@ public class FormaPagamento extends AppCompatActivity {
             TextView txtValor = findViewById(R.id.txtValor);
             txtValor.setText("R$ " + String.format("%.2f", extras.get("valor")).replace(".", ","));
 
+            // Ler SQLite local (salvo pelo verify_tap) como estado inicial
             Sqlite banco = new Sqlite(getApplicationContext());
             boolean cartaoEnabled = banco.getCartaoEnabled();
-            Log.d(TAG, "Cartao habilitado no banco: " + cartaoEnabled);
-            
+            Log.d(TAG, "[INIT] android_id=" + android_id
+                    + " | cartao_sqlite=" + cartaoEnabled
+                    + " | quantidade=" + quantidade);
+
             if (!cartaoEnabled) {
-                Log.w(TAG, "Desabilitando botões de cartão (banco retornou false)");
+                Log.w(TAG, "[INIT] Desabilitando botões de cartão (SQLite retornou false)");
                 disableCardButtons();
             } else {
-                Log.i(TAG, "Botões de cartão habilitados (banco retornou true)");
+                Log.i(TAG, "[INIT] Botões de cartão habilitados pelo SQLite — verificando status em tempo real...");
+                // Verificar status real da leitora via API ao abrir a tela
+                checkReaderStatusRealtime();
             }
         }
+    }
+
+    /**
+     * Verifica em tempo real se a leitora está pronta para transacionar.
+     * Chamado ao abrir FormaPagamento quando o SQLite indica cartao=true.
+     * Desabilita os botões de cartão se a leitora não estiver pronta.
+     */
+    private void checkReaderStatusRealtime() {
+        Map<String, String> body = new HashMap<>();
+        body.put("android_id", android_id);
+
+        Log.d(TAG, "[READER_CHECK] Consultando reader_status.php em tempo real...");
+
+        new ApiHelper().sendPost(body, "reader_status.php", new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.e(TAG, "[READER_CHECK] Falha de rede: " + e.getMessage() + " — mantendo botões habilitados");
+                // Em caso de falha de rede, manter habilitado (não bloquear o usuário)
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                try (ResponseBody responseBody = response.body()) {
+                    String json = responseBody != null ? responseBody.string() : "{}";
+                    Log.d(TAG, "[READER_CHECK] Resposta HTTP " + response.code() + ": " + json);
+
+                    com.google.gson.JsonObject obj = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                    String statusLeitora = obj.has("status_leitora") ? obj.get("status_leitora").getAsString() : "offline";
+                    boolean apiAtiva     = obj.has("api_ativa") && obj.get("api_ativa").getAsBoolean();
+                    String leitoraNome   = obj.has("leitora_nome") ? obj.get("leitora_nome").getAsString() : "";
+                    String bateria       = obj.has("bateria") && !obj.get("bateria").isJsonNull() ? obj.get("bateria").getAsString() : "--";
+                    String conexao       = obj.has("conexao") && !obj.get("conexao").isJsonNull() ? obj.get("conexao").getAsString() : "--";
+
+                    Log.i(TAG, "[READER_CHECK] leitora=" + leitoraNome
+                            + " | status=" + statusLeitora
+                            + " | api_ativa=" + apiAtiva
+                            + " | bateria=" + bateria
+                            + " | conexao=" + conexao);
+
+                    boolean pronta = "online".equals(statusLeitora) || "idle".equals(statusLeitora);
+
+                    if (!pronta) {
+                        Log.w(TAG, "[READER_CHECK] Leitora NÃO pronta (status=" + statusLeitora + ") — desabilitando botões de cartão");
+                        runOnUiThread(() -> {
+                            disableCardButtons();
+                            // Exibir toast informativo
+                            String msg = "Leitora " + leitoraNome + " não disponível (" + statusLeitora + ")";
+                            android.widget.Toast.makeText(FormaPagamento.this, msg, android.widget.Toast.LENGTH_LONG).show();
+                        });
+                    } else {
+                        Log.i(TAG, "[READER_CHECK] Leitora PRONTA (status=" + statusLeitora + ") — botões de cartão habilitados");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "[READER_CHECK] Erro ao parsear resposta: " + e.getMessage());
+                    // Em caso de erro de parse, manter habilitado
+                }
+            }
+        });
     }
 
     private void disableCardButtons() {
@@ -235,9 +298,21 @@ public class FormaPagamento extends AppCompatActivity {
                 valorFormatado = valorObj.toString();
             }
 
-            String desc = extras.get("descricao").toString();
+            String desc = extras.get("descricao") != null ? extras.get("descricao").toString() : "Pagamento ChoppOn";
 
-            Log.d(TAG, "Iniciando request: Method=" + method + ", Valor=" + valorFormatado);
+            // ═══════════════════════════════════════════════════════════
+            // DEBUG COMPLETO: Parâmetros enviados para create_order.php
+            // ═══════════════════════════════════════════════════════════
+            Log.i("CHECKOUT_DEBUG", "══════════════════════════════════════");
+            Log.i("CHECKOUT_DEBUG", "MÉTODO SELECIONADO : " + method.toUpperCase());
+            Log.i("CHECKOUT_DEBUG", "android_id         : " + android_id);
+            Log.i("CHECKOUT_DEBUG", "valor              : R$ " + valorFormatado);
+            Log.i("CHECKOUT_DEBUG", "quantidade         : " + quantidade);
+            Log.i("CHECKOUT_DEBUG", "descricao          : " + desc);
+            Log.i("CHECKOUT_DEBUG", "cpf                : " + (cpfInput.isEmpty() ? "[vazio - usará padrão]" : cpfInput));
+            Log.i("CHECKOUT_DEBUG", "payment_method     : " + method);
+            Log.i("CHECKOUT_DEBUG", "══════════════════════════════════════");
+
             sendRequest(valorFormatado, desc, quantidade, cpfInput, method);
         }
     }
@@ -568,8 +643,13 @@ public class FormaPagamento extends AppCompatActivity {
     }
 
     public void updateQrCode(Qr qr) {
-        if (qr == null || qr.qr_code == null) return;
+        if (qr == null || qr.qr_code == null || qr.qr_code.isEmpty()) {
+            Log.e(TAG, "[QR_CODE] qr ou qr_code nulo/vazio — não é possível exibir QR Code");
+            showErrorMessage("Erro ao gerar QR Code PIX. Tente novamente.");
+            return;
+        }
         final String base64Image = qr.qr_code;
+        Log.d(TAG, "[QR_CODE] Decodificando base64, tamanho=" + base64Image.length() + " chars");
         runOnUiThread(() -> {
             try {
                 byte[] decodedString = Base64.decode(base64Image, Base64.DEFAULT);
@@ -577,9 +657,18 @@ public class FormaPagamento extends AppCompatActivity {
                 if (decodedByte != null) {
                     imageView.setImageBitmap(decodedByte);
                     imageView.setVisibility(View.VISIBLE);
+                    // CORREÇÃO: tornar o cardQrCode visível (estava INVISIBLE)
+                    if (cardQrCode != null) {
+                        cardQrCode.setVisibility(View.VISIBLE);
+                        Log.i(TAG, "[QR_CODE] QR Code PIX exibido com sucesso");
+                    }
+                } else {
+                    Log.e(TAG, "[QR_CODE] BitmapFactory retornou null — base64 inválido");
+                    showErrorMessage("Erro ao renderizar QR Code. Tente novamente.");
                 }
             } catch (Exception e) {
-                Log.e(TAG, "Erro render QR: " + e.getMessage());
+                Log.e(TAG, "[QR_CODE] Exceção ao renderizar QR Code: " + e.getMessage(), e);
+                showErrorMessage("Erro ao exibir QR Code: " + e.getMessage());
             }
         });
     }
