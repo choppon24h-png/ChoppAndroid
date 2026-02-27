@@ -30,13 +30,18 @@
  *   - PIX: generateQRCode chamada corretamente como função global
  */
 
-// Proteção global: garantir Content-Type JSON antes de qualquer coisa
+/// Buffer de saída: permite capturar e reescrever mesmo após erro fatal
+ob_start();
+
 header('Content-Type: application/json');
 
-// Handler de erros fatais
+// Handler de erros fatais com ob_clean para garantir corpo válido
 register_shutdown_function(function () {
     $error = error_get_last();
     if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+        if (ob_get_level() > 0) {
+            ob_clean();
+        }
         if (!headers_sent()) {
             header('Content-Type: application/json');
             http_response_code(500);
@@ -49,6 +54,7 @@ register_shutdown_function(function () {
                 'line' => $error['line'],
             ],
         ]);
+        ob_end_flush();
     }
 });
 
@@ -193,10 +199,10 @@ try {
             ");
             $stmt->execute([$result['checkout_id'], $result['pix_code'], $result['response'], $order_id]);
 
-            // Gerar QR Code — generateQRCode é função global definida no sumup.php
+            // Gerar QR Code — método da instância SumUpIntegration
             $qr_code_base64 = '';
             if (!empty($result['pix_code'])) {
-                $qr_code_base64 = generateQRCode($result['pix_code']);
+                $qr_code_base64 = $sumup->generateQRCode($result['pix_code']);
             }
 
             Logger::info('create_order: PIX criado', [
@@ -361,3 +367,5 @@ try {
         ],
     ]);
 }
+
+ob_end_flush();

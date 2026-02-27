@@ -518,7 +518,7 @@ if (!function_exists('generateQRCode')) {
      * @param string $text  Texto ou URL para o QR Code
      * @return string       Base64 da imagem PNG, ou string vazia em caso de falha
      */
-    function generateQRCode(string $text): string
+    public function generateQRCode(string $text): string
     {
         if (empty($text)) {
             Logger::warning('generateQRCode: texto vazio');
