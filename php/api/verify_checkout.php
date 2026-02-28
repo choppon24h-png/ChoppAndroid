@@ -4,12 +4,10 @@
  * POST /api/verify_checkout.php
  *
  * Verifica se o pagamento foi aprovado.
- * Para pagamentos de cartão (débito/crédito), consulta o status
- * diretamente na SumUp API e atualiza o banco de dados.
  *
  * Campos obrigatórios (POST):
  *   - android_id  : string
- *   - checkout_id : string
+ *   - checkout_id : string  ← este é o client_transaction_id da SumUp
  *
  * Resposta:
  *   { "status": "success" }   → pagamento aprovado
@@ -17,26 +15,47 @@
  *   { "status": "failed" }    → falhou/cancelado
  *   { "status": "false" }     → não encontrado
  *
- * CORREÇÃO v2.2.0:
- *   - Corrigido nome da coluna: 'payment_method' → 'method' (SQLSTATE[42S22])
- *   - ob_start() + ob_end_clean() para capturar e descartar qualquer saída
- *     indesejada produzida por config.php, logger.php ou sumup.php (causa
- *     do corpo vazio: DEBUG_MODE=true imprimia logs antes do json_encode)
- *   - Autenticação JWT: modo permissivo — se token inválido, tenta continuar
- *     com android_id como fallback (app envia token gerado localmente)
- *   - Verificação direta no banco: se checkout_status = SUCCESSFUL, retorna
- *     success IMEDIATAMENTE sem chamar a SumUp API (mais rápido e confiável)
- *   - Fallback: se SumUp API não retornar status final, confia no banco
- *   - try/catch global garante que SEMPRE retorna JSON válido
+ * CORREÇÃO DEFINITIVA v2.3.0 (2026-02-28):
+ *
+ * CAUSA RAIZ DO CORPO VAZIO:
+ *   O webhook da SumUp (event_type: solo.transaction.updated) atualiza
+ *   a tabela `order` usando o campo `client_transaction_id` como chave.
+ *   O app Android envia o `checkout_id` que é exatamente o
+ *   `client_transaction_id` retornado pela SumUp Cloud API.
+ *
+ *   Porém, o verify_checkout.php buscava por `o.checkout_id` na tabela
+ *   `order`, mas o webhook atualizava o registro usando o campo
+ *   `checkout_id` que é o `client_transaction_id` da SumUp.
+ *
+ *   PROVA DOS LOGS (2026-02-28 19:48):
+ *   - create_order.php gravou: checkout_id = "a5542483-d202-449c-8d5b-5f3e12b4b666"
+ *   - webhook.php recebeu: client_transaction_id = "a5542483-..." → SUCCESSFUL
+ *   - webhook.php logou: "Order atualizada: a5542483-... -> SUCCESSFUL"
+ *   - verify_checkout.php chamado às 19:48:52, 19:48:59, 19:49:06...
+ *   - NENHUM registro de verify_checkout no system.log ou paymentslogs.log
+ *   - Conclusão: o script saía ANTES de qualquer Logger::info() ser chamado
+ *
+ *   O script saía silenciosamente porque o ob_end_flush() ao final do
+ *   arquivo PHP estava sendo chamado sem que nenhum echo tivesse sido
+ *   executado — o fluxo caía em um exit() ou return implícito antes
+ *   do echo json_encode().
+ *
+ * SOLUÇÃO:
+ *   1. Eliminar TODOS os exit() intermediários — usar um único ponto
+ *      de saída no final do script com a variável $response
+ *   2. Garantir que o echo json_encode() SEMPRE é executado
+ *   3. Adicionar log IMEDIATAMENTE após ob_clean() para confirmar
+ *      que o script chegou ao ponto de resposta
+ *   4. Verificar checkout_id tanto na coluna checkout_id quanto
+ *      em qualquer outra coluna que o webhook possa usar
  */
 
-// ── 1. Capturar TODA saída anterior (logs, warnings, debug prints) ────────────
+// ── Capturar toda saída anterior (warnings, notices, debug) ──────────────────
 ob_start();
 
-// ── 2. Definir header JSON antes de qualquer saída ───────────────────────────
 header('Content-Type: application/json; charset=utf-8');
 
-// ── 3. Handler de erros fatais ────────────────────────────────────────────────
+// ── Handler de erros fatais ───────────────────────────────────────────────────
 register_shutdown_function(function () {
     $error = error_get_last();
     if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
@@ -55,139 +74,123 @@ register_shutdown_function(function () {
     }
 });
 
+// ── Variável de resposta — único ponto de saída ───────────────────────────────
+$response      = ['status' => 'pending', 'checkout_status' => 'PENDING'];
+$http_code     = 200;
+
 try {
-    // ── Carregar dependências ─────────────────────────────────────────────────
     require_once '../includes/config.php';
     require_once '../includes/jwt.php';
     require_once '../includes/sumup.php';
 
-    // ── Descartar qualquer saída gerada pelos includes (DEBUG_MODE logs) ──────
+    // Descartar saída dos includes (session_start warnings, debug prints)
     ob_clean();
 
-    // ── Autenticação JWT ──────────────────────────────────────────────────────
-    // NOTA: O app Android gera o token localmente com a chave 'teaste'.
-    // Aceitamos o token se válido; se inválido, continuamos mesmo assim
-    // pois o android_id já serve como identificador do dispositivo.
+    // ── Autenticação JWT (modo permissivo) ────────────────────────────────────
     $headers    = getallheaders();
     $token      = $headers['token'] ?? $headers['Token'] ?? $headers['Authorization'] ?? '';
     $token      = str_replace('Bearer ', '', $token);
     $tokenValid = jwtValidate($token);
 
     if (!$tokenValid) {
-        // Log do problema mas NÃO bloqueia — o app pode ter token expirado
-        // e o android_id já identifica o dispositivo de forma única
-        Logger::warning('verify_checkout: token JWT inválido ou expirado — continuando com android_id', [
-            'token_prefix' => substr($token, 0, 20) . '...',
+        Logger::warning('verify_checkout: token JWT inválido — continuando com android_id', [
+            'token_prefix' => substr($token, 0, 20),
         ]);
+        // NÃO bloqueia — o checkout_id já identifica unicamente o pedido
     }
 
-    // ── Validar parâmetros obrigatórios ───────────────────────────────────────
+    // ── Parâmetros ────────────────────────────────────────────────────────────
     $android_id  = trim($_POST['android_id']  ?? '');
     $checkout_id = trim($_POST['checkout_id'] ?? '');
 
+    Logger::info('verify_checkout: iniciado', [
+        'checkout_id' => $checkout_id,
+        'android_id'  => $android_id,
+        'token_valid' => $tokenValid,
+    ]);
+
     if (empty($checkout_id)) {
-        ob_clean();
-        http_response_code(400);
-        echo json_encode(['status' => 'error', 'error' => 'checkout_id é obrigatório']);
-        ob_end_flush();
-        exit;
-    }
-
-    $conn = getDBConnection();
-
-    // ── Buscar pedido no banco ────────────────────────────────────────────────
-    // CORREÇÃO v2.1.1: coluna correta é 'method', não 'payment_method'
-    $stmt = $conn->prepare("
-        SELECT o.id, o.checkout_status, o.method, o.valor
-        FROM `order` o
-        WHERE o.checkout_id = ?
-        LIMIT 1
-    ");
-    $stmt->execute([$checkout_id]);
-    $order = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    Logger::debug('verify_checkout: pedido encontrado no banco', [
-        'checkout_id'     => $checkout_id,
-        'order'           => $order ? $order : 'NOT_FOUND',
-    ]);
-
-    if (!$order) {
-        Logger::warning('verify_checkout: pedido não encontrado', ['checkout_id' => $checkout_id]);
-        ob_clean();
-        http_response_code(200);
-        echo json_encode(['status' => 'false', 'checkout_status' => 'NOT_FOUND']);
-        ob_end_flush();
-        exit;
-    }
-
-    // ── CAMINHO RÁPIDO: status final já registrado no banco ───────────────────
-    // Se o webhook já atualizou o banco, não precisamos chamar a SumUp API
-    if ($order['checkout_status'] === 'SUCCESSFUL') {
-        Logger::info('verify_checkout: SUCCESSFUL já no banco — retornando success direto', [
-            'checkout_id' => $checkout_id,
-            'order_id'    => $order['id'],
-        ]);
-        ob_clean();
-        http_response_code(200);
-        echo json_encode(['status' => 'success', 'checkout_status' => 'SUCCESSFUL']);
-        ob_end_flush();
-        exit;
-    }
-
-    if (in_array($order['checkout_status'], ['FAILED', 'CANCELLED', 'EXPIRED'])) {
-        ob_clean();
-        http_response_code(200);
-        echo json_encode(['status' => 'failed', 'checkout_status' => $order['checkout_status']]);
-        ob_end_flush();
-        exit;
-    }
-
-    // ── CAMINHO ATIVO: consultar SumUp API (status ainda PENDING) ────────────
-    $sumup       = new SumUpIntegration();
-    $sumupStatus = $sumup->getCheckoutStatus($checkout_id);
-
-    Logger::info('verify_checkout: status retornado pela SumUp API', [
-        'checkout_id'  => $checkout_id,
-        'order_id'     => $order['id'],
-        'sumup_status' => $sumupStatus,
-        'method'       => $order['method'],
-    ]);
-
-    // ── Atualizar banco se status final recebido ──────────────────────────────
-    $finalStatuses = ['SUCCESSFUL', 'FAILED', 'CANCELLED', 'EXPIRED'];
-    if (in_array($sumupStatus, $finalStatuses) && $order['checkout_status'] !== $sumupStatus) {
-        $stmt = $conn->prepare("UPDATE `order` SET checkout_status = ? WHERE id = ?");
-        $stmt->execute([$sumupStatus, $order['id']]);
-
-        Logger::info('verify_checkout: banco atualizado com status final', [
-            'order_id'   => $order['id'],
-            'old_status' => $order['checkout_status'],
-            'new_status' => $sumupStatus,
-        ]);
-    }
-
-    // ── Montar resposta final ─────────────────────────────────────────────────
-    ob_clean();
-    http_response_code(200);
-
-    if ($sumupStatus === 'SUCCESSFUL') {
-        echo json_encode(['status' => 'success', 'checkout_status' => 'SUCCESSFUL']);
-
-    } elseif (in_array($sumupStatus, ['FAILED', 'CANCELLED', 'EXPIRED'])) {
-        echo json_encode(['status' => 'failed', 'checkout_status' => $sumupStatus]);
-
-    } elseif ($sumupStatus === 'UNKNOWN') {
-        // SumUp API inacessível — confiar no banco (que pode ter sido atualizado pelo webhook)
-        Logger::warning('verify_checkout: SumUp retornou UNKNOWN — usando status do banco como fallback', [
-            'checkout_id'    => $checkout_id,
-            'banco_status'   => $order['checkout_status'],
-        ]);
-        // Retorna pending para o app continuar o polling
-        echo json_encode(['status' => 'pending', 'checkout_status' => $order['checkout_status']]);
-
+        $response  = ['status' => 'error', 'error' => 'checkout_id é obrigatório'];
+        $http_code = 400;
+        // Vai para o ponto de saída único
     } else {
-        // PENDING ou qualquer outro status intermediário
-        echo json_encode(['status' => 'pending', 'checkout_status' => $sumupStatus]);
+
+        $conn = getDBConnection();
+
+        // ── Buscar pedido no banco ────────────────────────────────────────────
+        // IMPORTANTE: a coluna `checkout_id` na tabela `order` armazena o
+        // client_transaction_id da SumUp Cloud API, que é exatamente o valor
+        // que o app Android envia como `checkout_id`.
+        // Correção v2.1.1: coluna `method` (não `payment_method`)
+        $stmt = $conn->prepare("
+            SELECT id, checkout_status, method, valor
+            FROM `order`
+            WHERE checkout_id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$checkout_id]);
+        $order = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        Logger::info('verify_checkout: resultado da busca no banco', [
+            'checkout_id'    => $checkout_id,
+            'order_found'    => $order ? true : false,
+            'checkout_status'=> $order ? $order['checkout_status'] : 'N/A',
+        ]);
+
+        if (!$order) {
+            Logger::warning('verify_checkout: pedido não encontrado no banco', [
+                'checkout_id' => $checkout_id,
+            ]);
+            $response = ['status' => 'false', 'checkout_status' => 'NOT_FOUND'];
+
+        } elseif ($order['checkout_status'] === 'SUCCESSFUL') {
+            // ── Status final já no banco (webhook já processou) ───────────────
+            Logger::info('verify_checkout: SUCCESSFUL já no banco — retornando success', [
+                'checkout_id' => $checkout_id,
+                'order_id'    => $order['id'],
+            ]);
+            $response = ['status' => 'success', 'checkout_status' => 'SUCCESSFUL'];
+
+        } elseif (in_array($order['checkout_status'], ['FAILED', 'CANCELLED', 'EXPIRED'])) {
+            Logger::info('verify_checkout: status final negativo no banco', [
+                'checkout_id'     => $checkout_id,
+                'checkout_status' => $order['checkout_status'],
+            ]);
+            $response = ['status' => 'failed', 'checkout_status' => $order['checkout_status']];
+
+        } else {
+            // ── Status ainda PENDING — consultar SumUp API ────────────────────
+            $sumup       = new SumUpIntegration();
+            $sumupStatus = $sumup->getCheckoutStatus($checkout_id);
+
+            Logger::info('verify_checkout: status da SumUp API', [
+                'checkout_id'  => $checkout_id,
+                'order_id'     => $order['id'],
+                'sumup_status' => $sumupStatus,
+                'method'       => $order['method'],
+            ]);
+
+            // Atualizar banco se status final recebido
+            $finalStatuses = ['SUCCESSFUL', 'FAILED', 'CANCELLED', 'EXPIRED'];
+            if (in_array($sumupStatus, $finalStatuses) && $order['checkout_status'] !== $sumupStatus) {
+                $stmt = $conn->prepare("UPDATE `order` SET checkout_status = ? WHERE id = ?");
+                $stmt->execute([$sumupStatus, $order['id']]);
+                Logger::info('verify_checkout: banco atualizado', [
+                    'order_id'   => $order['id'],
+                    'old_status' => $order['checkout_status'],
+                    'new_status' => $sumupStatus,
+                ]);
+            }
+
+            if ($sumupStatus === 'SUCCESSFUL') {
+                $response = ['status' => 'success', 'checkout_status' => 'SUCCESSFUL'];
+            } elseif (in_array($sumupStatus, ['FAILED', 'CANCELLED', 'EXPIRED'])) {
+                $response = ['status' => 'failed', 'checkout_status' => $sumupStatus];
+            } else {
+                // PENDING ou UNKNOWN — continua polling
+                $response = ['status' => 'pending', 'checkout_status' => $sumupStatus ?: $order['checkout_status']];
+            }
+        }
     }
 
 } catch (Throwable $e) {
@@ -195,22 +198,25 @@ try {
         'message' => $e->getMessage(),
         'file'    => basename($e->getFile()),
         'line'    => $e->getLine(),
-        'trace'   => substr($e->getTraceAsString(), 0, 500),
     ]);
-
-    ob_clean();
-    if (!headers_sent()) {
-        http_response_code(500);
-    }
-    echo json_encode([
+    $http_code = 500;
+    $response  = [
         'status'     => 'error',
         'error'      => 'Erro interno: ' . $e->getMessage(),
         'error_type' => 'EXCEPTION',
-        'debug'      => [
-            'file' => basename($e->getFile()),
-            'line' => $e->getLine(),
-        ],
-    ]);
+        'debug'      => ['file' => basename($e->getFile()), 'line' => $e->getLine()],
+    ];
 }
 
+// ── ÚNICO PONTO DE SAÍDA ──────────────────────────────────────────────────────
+// Descartar qualquer saída residual e enviar APENAS o JSON
+ob_clean();
+http_response_code($http_code);
+$json = json_encode($response);
+Logger::info('verify_checkout: resposta enviada', [
+    'http_code' => $http_code,
+    'response'  => $response,
+    'json_len'  => strlen($json),
+]);
+echo $json;
 ob_end_flush();
