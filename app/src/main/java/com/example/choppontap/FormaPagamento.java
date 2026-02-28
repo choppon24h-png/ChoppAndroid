@@ -53,14 +53,13 @@ public class FormaPagamento extends AppCompatActivity {
     private Handler handlerCountDown = new Handler(Looper.getMainLooper());
     private Runnable runnableCountDown;
     
-    // Estados da UI para evitar tela branca
     private static final int STATE_CHOOSING = 0;
     private static final int STATE_LOADING = 1;
     private static final int STATE_PIX = 2;
     private static final int STATE_CARD = 3;
 
     private ImageView imageView;
-    private Boolean checkout_status = false;
+    private volatile Boolean checkout_status = false; 
     private EditText edt;
     private ConstraintLayout constLoader;
     private TextView txtPreloader;
@@ -73,7 +72,7 @@ public class FormaPagamento extends AppCompatActivity {
     private TextView txtTimerCartao, txtSetaPiscando, txtInstrucaoCartao;
 
     private static final String TAG = "PAGAMENTO_DEBUG";
-    private int retryCount = 0;
+    private int consecutiveErrors = 0;
     private static final int MAX_RETRIES = 3;
 
     @Override
@@ -116,42 +115,23 @@ public class FormaPagamento extends AppCompatActivity {
         btnVoltar.setOnClickListener(v -> voltarParaHome());
         
         btnConfirmarPagamento.setOnClickListener(v -> {
-            if (checkout_id != null) verifyPayment(checkout_id);
+            if (checkout_id != null) {
+                Log.i(TAG, "👆 Confirmação MANUAL disparada.");
+                verifyPayment(checkout_id);
+            }
         });
 
         updateUIState(STATE_CHOOSING);
     }
 
-    /**
-     * ✅ GERENCIADOR DE ESTADO SÊNIOR
-     * Garante que os containers corretos fiquem visíveis e limpa o vácuo visual.
-     */
     private void updateUIState(int state) {
         runOnUiThread(() -> {
             Log.d(TAG, "🔄 Mudando estado da UI para: " + state);
-            
-            // Esconder tudo primeiro
-            layoutEscolhaPagamento.setVisibility(View.GONE);
-            constLoader.setVisibility(View.GONE);
-            layoutQrPix.setVisibility(View.GONE);
-            layoutInstrucaoCartao.setVisibility(View.GONE);
-
-            // Mostrar apenas o necessário
-            switch (state) {
-                case STATE_CHOOSING:
-                    layoutEscolhaPagamento.setVisibility(View.VISIBLE);
-                    changeButtonsFunction(true);
-                    break;
-                case STATE_LOADING:
-                    constLoader.setVisibility(View.VISIBLE);
-                    break;
-                case STATE_PIX:
-                    layoutQrPix.setVisibility(View.VISIBLE);
-                    break;
-                case STATE_CARD:
-                    layoutInstrucaoCartao.setVisibility(View.VISIBLE);
-                    break;
-            }
+            layoutEscolhaPagamento.setVisibility(state == STATE_CHOOSING ? View.VISIBLE : View.GONE);
+            constLoader.setVisibility(state == STATE_LOADING ? View.VISIBLE : View.GONE);
+            layoutQrPix.setVisibility(state == STATE_PIX ? View.VISIBLE : View.GONE);
+            layoutInstrucaoCartao.setVisibility(state == STATE_CARD ? View.VISIBLE : View.GONE);
+            if (state == STATE_CHOOSING) changeButtonsFunction(true);
         });
     }
 
@@ -160,10 +140,8 @@ public class FormaPagamento extends AppCompatActivity {
         if (validateCpfFacultativo(cpfInput)) {
             Bundle extras = getIntent().getExtras();
             if (extras == null) return;
-
             String valorFormatado = String.format(Locale.US, "%.2f", ((Number) extras.get("valor")).doubleValue());
             String desc = extras.get("descricao") != null ? extras.get("descricao").toString() : "Pagamento ChoppOn";
-            
             sendRequest(valorFormatado, desc, quantidade, cpfInput, method);
         }
     }
@@ -183,16 +161,13 @@ public class FormaPagamento extends AppCompatActivity {
         new ApiHelper().sendPost(body, "create_order.php", new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                Log.e(TAG, "Falha na rede: " + e.getMessage());
-                showErrorMessage("Erro de conexão. Tente novamente.");
+                runOnUiThread(() -> showErrorMessage("Falha na rede. Tente novamente."));
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
                 try (ResponseBody rb = response.body()) {
                     String json = rb != null ? rb.string() : "";
-                    Log.d(TAG, "✅ Resposta API: " + json);
-
                     if (!response.isSuccessful() || json.isEmpty()) {
                         runOnUiThread(() -> showErrorMessage("Erro no servidor (" + response.code() + ")"));
                         return;
@@ -201,14 +176,12 @@ public class FormaPagamento extends AppCompatActivity {
                     Qr qr = new Gson().fromJson(json, Qr.class);
                     if (qr != null && qr.checkout_id != null) {
                         checkout_id = qr.checkout_id;
-                        
                         if (method.equals("pix")) {
                             updateUIState(STATE_PIX);
                             updateQrCode(qr);
                             startCountDown(180);
                             startVerifing(qr.checkout_id, 180);
                         } else {
-                            // Configura instrução do cartão com dados do leitor
                             runOnUiThread(() -> {
                                 updateUIState(STATE_CARD);
                                 String msg = "INSIRA OU APROXIME\nO CARTÃO";
@@ -216,14 +189,13 @@ public class FormaPagamento extends AppCompatActivity {
                                 txtInstrucaoCartao.setText(msg);
                                 startBlinkingSeta();
                             });
-                            startCountDown(80);
-                            startVerifing(qr.checkout_id, 80);
+                            startCountDown(60);
+                            startVerifing(qr.checkout_id, 60);
                         }
                     } else {
-                        runOnUiThread(() -> showErrorMessage("Resposta inválida do servidor."));
+                        runOnUiThread(() -> showErrorMessage("Dados inválidos do servidor."));
                     }
                 } catch (Exception e) {
-                    Log.e(TAG, "Erro processamento: " + e.getMessage());
                     runOnUiThread(() -> showErrorMessage("Erro ao processar pagamento."));
                 }
             }
@@ -248,16 +220,12 @@ public class FormaPagamento extends AppCompatActivity {
         });
     }
 
-    private void resetPaymentState() {
-        stopRunnable();
-        checkout_id = null;
-        updateUIState(STATE_CHOOSING);
-    }
-
     private void voltarParaHome() {
-        stopRunnable();
-        startActivity(new Intent(this, Home.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
-        finish();
+        runOnUiThread(() -> {
+            stopRunnable();
+            startActivity(new Intent(this, Home.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
+            finish();
+        });
     }
 
     public void SendCardCancel() {
@@ -273,76 +241,76 @@ public class FormaPagamento extends AppCompatActivity {
         voltarParaHome();
     }
 
-    // --- Métodos de Suporte (Timer, Bluetooth, Fullscreen, etc.) permanecem inalterados ---
-    private void setupFullscreen() {
-        WindowInsetsControllerCompat windowInsetsController = new WindowInsetsControllerCompat(getWindow(), getWindow().getDecorView());
-        windowInsetsController.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars());
-        windowInsetsController.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
-    }
-
-    private void loadInitialData() {
-        android_id = Settings.Secure.getString(this.getContentResolver(), Settings.Secure.ANDROID_ID);
-        Bundle extras = getIntent().getExtras();
-        if (extras != null) {
-            quantidade = extras.get("quantidade").toString();
-            TextView txtValor = findViewById(R.id.txtValor);
-            txtValor.setText("R$ " + String.format("%.2f", extras.get("valor")).replace(".", ","));
-        }
-    }
-
-    private void setupCpfMask() {
-        edt.addTextChangedListener(CpfMask.insert(edt));
-    }
-
-    private boolean validateCpfFacultativo(String cpf) {
-        String cleanCpf = CpfMask.unmask(cpf);
-        if (cleanCpf.isEmpty()) return true;
-        ValidaCPF valida = new ValidaCPF();
-        if (cleanCpf.length() != 11 || !valida.isCPF(cleanCpf)) {
-            Toast.makeText(this, "CPF inválido", Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        return true;
-    }
-
     public void startVerifing(String checkout_id, int totalSeconds) {
         if (checkout_id == null) return;
-        final int delay = 5000;
+        this.checkout_id = checkout_id;
+        final int delay = 7000; // ✅ OTIMIZADO PARA 7s
         final int maxIterations = totalSeconds / (delay / 1000);
         runnable = new Runnable() {
             int i = 0;
             public void run() {
-                if (checkout_status) navigateToSuccess();
-                else if (i >= maxIterations) voltarParaHome();
-                else {
-                    verifyPayment(checkout_id);
+                if (checkout_status) {
+                    Log.i(TAG, "🚀 Transição para sucesso confirmada!");
+                    navigateToSuccess();
+                } else if (i >= maxIterations) {
+                    voltarParaHome();
+                } else {
+                    Log.d(TAG, "📡 Consultando status (tentativa " + (i+1) + ")...");
+                    verifyPayment(FormaPagamento.this.checkout_id);
                     i++;
                     handler.postDelayed(this, delay);
                 }
             }
         };
-        handler.postDelayed(runnable, delay);
+        handler.postDelayed(runnable, 3000);
     }
 
     private void navigateToSuccess() {
-        stopRunnable();
-        startActivity(new Intent(this, PagamentoConcluido.class).putExtra("qtd_ml", quantidade).putExtra("checkout_id", checkout_id));
-        finish();
+        runOnUiThread(() -> {
+            stopRunnable();
+            Intent it = new Intent(this, PagamentoConcluido.class);
+            it.putExtra("qtd_ml", quantidade);
+            it.putExtra("checkout_id", checkout_id);
+            startActivity(it);
+            finish();
+        });
     }
 
     public void verifyPayment(String checkout_id) {
+        if (checkout_id == null) return;
         Map<String, String> body = new HashMap<>();
         body.put("android_id", android_id);
         body.put("checkout_id", checkout_id);
+
         new ApiHelper().sendPost(body, "verify_checkout.php", new Callback() {
-            @Override public void onResponse(Call call, Response response) throws IOException {
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
                 try (ResponseBody rb = response.body()) {
-                    CheckoutResponse cr = new Gson().fromJson(rb.string(), CheckoutResponse.class);
-                    if (cr != null && "success".equals(cr.status)) checkout_status = true;
-                } catch (Exception e) {}
+                    String json = rb != null ? rb.string() : "";
+                    Log.d(TAG, "🔍 RESPOSTA VERIFICAÇÃO: " + json);
+                    
+                    if (response.isSuccessful() && !json.isEmpty()) {
+                        CheckoutResponse cr = new Gson().fromJson(json, CheckoutResponse.class);
+                        
+                        // Aceita variações de "success" ou status "SUCCESSFUL" da SumUp
+                        if (cr.status != null && (cr.status.equalsIgnoreCase("success") || 
+                            (cr.checkout_status != null && cr.checkout_status.equalsIgnoreCase("SUCCESSFUL")))) {
+                            
+                            Log.i(TAG, "💰 PAGAMENTO APROVADO! Redirecionando...");
+                            checkout_status = true;
+                            navigateToSuccess();
+                        } else {
+                            Log.d(TAG, "⏳ Pagamento ainda pendente: " + (cr.checkout_status != null ? cr.checkout_status : "WAITING"));
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Erro parse verificação: " + e.getMessage());
+                }
             }
-            @Override public void onFailure(Call call, IOException e) {}
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.e(TAG, "Erro de rede na verificação: " + e.getMessage());
+            }
         });
     }
 
@@ -355,7 +323,10 @@ public class FormaPagamento extends AppCompatActivity {
                     runOnUiThread(() -> {
                         String t = (seconds - currentI) + "s";
                         if (layoutInstrucaoCartao.getVisibility() == View.VISIBLE) txtTimerCartao.setText(t);
-                        else ((TextView)findViewById(R.id.txtTimer)).setText(t);
+                        else {
+                            TextView tv = findViewById(R.id.txtTimer);
+                            if (tv != null) tv.setText(t);
+                        }
                     });
                     i++;
                     handlerCountDown.postDelayed(this, 1000);
@@ -365,15 +336,42 @@ public class FormaPagamento extends AppCompatActivity {
         handlerCountDown.postDelayed(runnableCountDown, 1000);
     }
 
+    private void setupFullscreen() {
+        WindowInsetsControllerCompat wic = new WindowInsetsControllerCompat(getWindow(), getWindow().getDecorView());
+        wic.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars());
+        wic.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
+    }
+
+    private void loadInitialData() {
+        android_id = Settings.Secure.getString(this.getContentResolver(), Settings.Secure.ANDROID_ID);
+        Bundle extras = getIntent().getExtras();
+        if (extras != null) {
+            quantidade = extras.get("quantidade").toString();
+            ((TextView)findViewById(R.id.txtValor)).setText("R$ " + String.format("%.2f", extras.get("valor")).replace(".", ","));
+        }
+    }
+
+    private void setupCpfMask() { edt.addTextChangedListener(CpfMask.insert(edt)); }
+
+    private boolean validateCpfFacultativo(String cpf) {
+        String c = CpfMask.unmask(cpf);
+        if (c.isEmpty()) return true;
+        ValidaCPF v = new ValidaCPF();
+        if (c.length() != 11 || !v.isCPF(c)) {
+            Toast.makeText(this, "CPF inválido", Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        return true;
+    }
+
     public void changeButtonsFunction(Boolean enabled) {
         Sqlite banco = new Sqlite(getApplicationContext());
         boolean card = enabled && banco.getCartaoEnabled();
         runOnUiThread(() -> {
-            btnPix.setEnabled(enabled);
-            btnCard.setEnabled(card);
-            btnCardDebit.setEnabled(card);
-            int c = enabled ? Color.parseColor("#FF8C00") : Color.GRAY;
-            btnPix.setBackgroundColor(c);
+            btnPix.setEnabled(enabled); btnCard.setEnabled(card); btnCardDebit.setEnabled(card);
+            int color = enabled ? Color.parseColor("#FF8C00") : Color.GRAY;
+            btnPix.setBackgroundColor(color);
             btnCard.setBackgroundColor(card ? Color.parseColor("#FF8C00") : Color.GRAY);
             btnCardDebit.setBackgroundColor(card ? Color.parseColor("#FF8C00") : Color.GRAY);
         });
