@@ -24,13 +24,12 @@ import okhttp3.Response;
 public class ApiHelper {
     private static final String TAG = "ApiHelper";
 
-    // ✅ SENIOR FIX: Forçado HTTP/1.1 para evitar StreamResetException em transações de cartão
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .callTimeout(90, TimeUnit.SECONDS)
-            .protocols(Collections.singletonList(Protocol.HTTP_1_1)) // Estabiliza conexão com servidores Apache antigos
+            .protocols(Collections.singletonList(Protocol.HTTP_1_1)) 
             .retryOnConnectionFailure(true)
             .addInterceptor(chain -> {
                 Request request = chain.request();
@@ -42,9 +41,6 @@ public class ApiHelper {
     private final String api = "https://ochoppoficial.com.br/api/";
     private final String key = "teaste";
 
-    /**
-     * ✅ RESTAURADO: Warm-up do servidor para "acordar" o backend (PHP-FPM/MySQL)
-     */
     public void warmupServer() {
         Log.d(TAG, "🔥 [Warm-up] Iniciando...");
         Request warmupRequest = new Request.Builder()
@@ -62,16 +58,24 @@ public class ApiHelper {
         try (Response response = warmupClient.newCall(warmupRequest).execute()) {
             Log.i(TAG, "✅ [Warm-up] Finalizado com código: " + response.code());
         } catch (Exception e) {
-            Log.d(TAG, "⚠️ [Warm-up] Falhou ou excedeu tempo (esperado se servidor estava dormindo)");
+            Log.d(TAG, "⚠️ [Warm-up] Falhou ou excedeu tempo");
         }
     }
 
+    /**
+     * ✅ SENIOR FIX: Geração de Token com margem de segurança (Clock Skew)
+     */
     private String gerarToken() {
         try {
             long nowMillis = System.currentTimeMillis();
+            // Inicia 5 minutos no passado para evitar erros de relógio dessincronizado
+            Date issuedAt = new Date(nowMillis - 300000); 
+            // Expira em 2 horas
+            Date expiresAt = new Date(nowMillis + 7200000);
+
             return Jwts.builder()
-                    .setIssuedAt(new Date(nowMillis))
-                    .setExpiration(new Date(nowMillis + 3600000))
+                    .setIssuedAt(issuedAt)
+                    .setExpiration(expiresAt)
                     .setId(java.util.UUID.randomUUID().toString())
                     .claim("app", "choppon_tap")
                     .signWith(SignatureAlgorithm.HS256, key.getBytes("UTF-8"))
@@ -87,17 +91,11 @@ public class ApiHelper {
             String token = gerarToken();
             FormBody.Builder builder = new FormBody.Builder();
             
-            // ✅ AUDITORIA DE PARÂMETROS
-            StringBuilder logParams = new StringBuilder("\n--- PARÂMETROS ENVIADOS ---\n");
             if (body != null) {
                 for (Map.Entry<String, String> entry : body.entrySet()) {
-                    String val = entry.getValue() != null ? entry.getValue() : "NULL";
-                    builder.add(entry.getKey(), val);
-                    logParams.append(entry.getKey()).append(": ").append(val).append("\n");
+                    builder.add(entry.getKey(), entry.getValue() != null ? entry.getValue() : "NULL");
                 }
             }
-            logParams.append("---------------------------");
-            Log.i(TAG, logParams.toString());
 
             String fullUrl = api + (endpoint.endsWith(".php") ? endpoint : endpoint + ".php");
 
@@ -120,8 +118,6 @@ public class ApiHelper {
         try (Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful()) return null;
             byte[] imageBytes = response.body().bytes();
-            
-            // ✅ Regra de compressão mantida para evitar OOM
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inSampleSize = 2; 
             return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length, options);
