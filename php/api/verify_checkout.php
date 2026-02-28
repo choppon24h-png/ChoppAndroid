@@ -1,13 +1,10 @@
 <?php
 /**
- * API - Verificar Checkout (Versão de Diagnóstico Senior)
+ * API - Verificar Checkout (Versão Estabilizada)
  */
 
-// ✅ Ativar exibição de erros para capturar o motivo da resposta vazia
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
-
+// Desativar saída de erros HTML para não quebrar o JSON do Android
+ini_set('display_errors', 0);
 header('Content-Type: application/json');
 
 try {
@@ -15,38 +12,27 @@ try {
     require_once '../includes/jwt.php';
     require_once '../includes/sumup.php';
 
-    // Fallback para getallheaders em servidores Nginx
-    if (!function_exists('getallheaders')) {
-        function getallheaders() {
-            $headers = [];
-            foreach ($_SERVER as $name => $value) {
-                if (substr($name, 0, 5) == 'HTTP_') {
-                    $headers[str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($name, 5)))))] = $value;
-                }
-            }
-            return $headers;
-        }
-    }
-
+    // Capturar Token
     $headers = getallheaders();
     $token = $headers['token'] ?? $headers['Token'] ?? '';
 
+    // Se o token falhar, retornamos erro limpo
     if (!jwtValidate($token)) {
         http_response_code(401);
-        echo json_encode(['error' => 'Token expirado ou invalido', 'status' => 'failed']);
+        echo json_encode(['status' => 'failed', 'error' => 'Sessao expirada']);
         exit;
     }
 
-    $android_id = $_POST['android_id'] ?? '';
     $checkout_id = $_POST['checkout_id'] ?? '';
-
     if (empty($checkout_id)) {
-        throw new Exception("checkout_id ausente na requisicao");
+        echo json_encode(['status' => 'false', 'error' => 'ID ausente']);
+        exit;
     }
 
     $conn = getDBConnection();
     
-    // 1. Verificar status local no banco primeiro (Cache)
+    // ✅ PASSO 1: Verificação prioritária no Banco de Dados (alimentado pelo Webhook)
+    // Isso é o mais rápido e evita timeouts de rede externa
     $stmt = $conn->prepare("SELECT checkout_status FROM `order` WHERE checkout_id = ? LIMIT 1");
     $stmt->execute([$checkout_id]);
     $order = $stmt->fetch();
@@ -56,30 +42,34 @@ try {
         exit;
     }
 
-    // 2. Consultar SumUp em tempo real
+    // ✅ PASSO 2: Consulta em tempo real na SumUp (apenas se não estiver aprovado no banco)
     $sumup = new SumUpIntegration();
-    $sumupStatus = $sumup->getCheckoutStatus($checkout_id);
+    
+    // Usamos um bloco interno para que se a SumUp falhar, o script não morra
+    try {
+        $sumupStatus = $sumup->getCheckoutStatus($checkout_id);
+    } catch (Exception $e) {
+        $sumupStatus = 'PENDING'; // Fallback se a API externa falhar
+    }
 
-    // 3. Atualizar banco se aprovado
     if ($sumupStatus === 'SUCCESSFUL') {
+        // Atualiza o banco preventivamente caso o webhook ainda não tenha chegado
         $stmt = $conn->prepare("UPDATE `order` SET checkout_status = 'SUCCESSFUL' WHERE checkout_id = ?");
         $stmt->execute([$checkout_id]);
+        
         echo json_encode(['status' => 'success', 'checkout_status' => 'SUCCESSFUL']);
     } else {
+        // Se ainda não aprovou, retorna pendente de forma limpa
         echo json_encode([
             'status' => 'pending', 
-            'checkout_status' => $sumupStatus,
-            'debug_id' => $checkout_id
+            'checkout_status' => $sumupStatus ?: 'PENDING'
         ]);
     }
 
 } catch (Exception $e) {
-    // ✅ Captura o erro que antes causava a "Resposta Vazia"
-    http_response_code(500);
+    // ✅ GARANTIA: Sempre retorna um JSON válido
     echo json_encode([
-        'error' => $e->getMessage(),
-        'file' => basename($e->getFile()),
-        'line' => $e->getLine(),
-        'status' => 'error'
+        'status' => 'error',
+        'error' => 'Falha técnica no processamento'
     ]);
 }
