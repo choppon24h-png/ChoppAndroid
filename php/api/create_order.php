@@ -27,7 +27,7 @@
  *   - Proteção global try/catch: NUNCA retorna corpo vazio
  *   - SUMUP_AFFILIATE_KEY e SUMUP_AFFILIATE_APP_ID agora em config.php
  *   - Mensagens de erro detalhadas com error_type para o Android
- *   - PIX: generateQRCode chamada corretamente como função global
+ *   - PIX: generateQRCode chamada corretamente como método de instância de SumUpIntegration
  */
 
 /// Buffer de saída: permite capturar e reescrever mesmo após erro fatal

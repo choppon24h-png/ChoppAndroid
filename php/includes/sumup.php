@@ -8,10 +8,12 @@
  * Referência: https://developer.sumup.com/terminal-payments/cloud-api
  * Affiliate Keys: https://developer.sumup.com/tools/authorization/affiliate-keys/
  *
- * Versão: 2.1.0
+ * Versão: 2.2.0
  * Compatível com: chopponERP + ChoppAndroid
  *
- * CORREÇÕES v2.1.0:
+ * CORREÇÕES v2.2.0:
+ *  - generateQRCode movido para DENTRO da classe SumUpIntegration como método público
+ *    (corrige: "Call to undefined method SumUpIntegration::generateQRCode()")
  *  - Token sempre carregado do config.php como fonte primária (SUMUP_TOKEN)
  *  - affiliate_key e affiliate_app_id carregados do banco COM fallback para config.php
  *  - getReaderStatus: exibe bateria/conexão mesmo quando status=OFFLINE mas state=IDLE
@@ -29,9 +31,9 @@ class SumUpIntegration
     public function __construct()
     {
         // ── Fonte 1: Constantes do config.php (mais confiável, sempre disponível) ──
-        $this->token          = defined('SUMUP_TOKEN')          ? SUMUP_TOKEN          : '';
-        $this->merchantCode   = defined('SUMUP_MERCHANT_CODE')  ? SUMUP_MERCHANT_CODE  : '';
-        $this->affiliateKey   = defined('SUMUP_AFFILIATE_KEY')  ? SUMUP_AFFILIATE_KEY  : '';
+        $this->token          = defined('SUMUP_TOKEN')            ? SUMUP_TOKEN            : '';
+        $this->merchantCode   = defined('SUMUP_MERCHANT_CODE')    ? SUMUP_MERCHANT_CODE    : '';
+        $this->affiliateKey   = defined('SUMUP_AFFILIATE_KEY')    ? SUMUP_AFFILIATE_KEY    : '';
         $this->affiliateAppId = defined('SUMUP_AFFILIATE_APP_ID') ? SUMUP_AFFILIATE_APP_ID : '';
 
         // ── Fonte 2: Banco de dados (sobrescreve se preenchido) ──────────────────
@@ -41,7 +43,6 @@ class SumUpIntegration
             $cfg  = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($cfg) {
-                // Só sobrescreve se o valor do banco não estiver vazio
                 if (!empty($cfg['token_sumup']))      $this->token          = $cfg['token_sumup'];
                 if (!empty($cfg['merchant_code']))    $this->merchantCode   = $cfg['merchant_code'];
                 if (!empty($cfg['affiliate_key']))    $this->affiliateKey   = $cfg['affiliate_key'];
@@ -252,8 +253,8 @@ class SumUpIntegration
         $response = $this->httpGet($url);
 
         Logger::debug('SumUp getReaderStatus', [
-            'reader_id' => $reader_id,
-            'http_code' => $response['http_code'],
+            'reader_id'  => $reader_id,
+            'http_code'  => $response['http_code'],
             'body_short' => substr($response['body'], 0, 300),
         ]);
 
@@ -262,7 +263,7 @@ class SumUpIntegration
 
             // Extrair status do campo correto (status.data.status ou status.data.state)
             $statusData = $data['status']['data'] ?? [];
-            $rawStatus  = strtoupper($statusData['status'] ?? 'UNKNOWN');
+            $rawStatus  = strtoupper($statusData['status'] ?? '');
             $state      = strtoupper($statusData['state'] ?? '');
             $connType   = $statusData['connection_type'] ?? null;
             $battery    = $statusData['battery_level'] ?? null;
@@ -424,6 +425,61 @@ class SumUpIntegration
     }
 
     // =========================================================
+    // GERAR QR CODE (MÉTODO DE INSTÂNCIA — CORREÇÃO v2.2.0)
+    // =========================================================
+
+    /**
+     * Gera um QR Code em Base64 a partir de um texto/URL
+     * Usa a API QR Server (sem dependência externa)
+     *
+     * CORREÇÃO: Movido para dentro da classe como método público de instância.
+     * Antes era uma função global dentro de um bloco if(!function_exists()),
+     * o que causava "Call to undefined method SumUpIntegration::generateQRCode()".
+     *
+     * @param string $text  Texto ou URL para o QR Code
+     * @return string       Base64 da imagem PNG, ou string vazia em caso de falha
+     */
+    public function generateQRCode(string $text): string
+    {
+        if (empty($text)) {
+            Logger::warning('generateQRCode: texto vazio');
+            return '';
+        }
+
+        $url = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' . urlencode($text);
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+        ]);
+
+        $imageData = curl_exec($ch);
+        $httpCode  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($curlError) {
+            Logger::error('generateQRCode: cURL error', ['error' => $curlError, 'text_len' => strlen($text)]);
+            return '';
+        }
+
+        if ($imageData && strlen($imageData) > 100 && $httpCode === 200) {
+            Logger::debug('generateQRCode: sucesso', ['size_bytes' => strlen($imageData)]);
+            return base64_encode($imageData);
+        }
+
+        Logger::warning('generateQRCode: falhou ao gerar QR Code', [
+            'http_code' => $httpCode,
+            'text_len'  => strlen($text),
+        ]);
+        return '';
+    }
+
+    // =========================================================
     // HTTP HELPERS (cURL)
     // =========================================================
 
@@ -434,7 +490,7 @@ class SumUpIntegration
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => json_encode($body),
-            CURLOPT_TIMEOUT        => 20,  // Reduzido de 30s para 20s
+            CURLOPT_TIMEOUT        => 20,
             CURLOPT_CONNECTTIMEOUT => 8,
             CURLOPT_HTTPHEADER     => [
                 'Authorization: Bearer ' . $this->token,
@@ -503,58 +559,5 @@ class SumUpIntegration
         curl_close($ch);
 
         return ['http_code' => $httpCode, 'body' => $responseBody ?: ''];
-    }
-}
-
-// =========================================================
-// FUNÇÃO AUXILIAR: Gerar QR Code em Base64
-// =========================================================
-
-if (!function_exists('generateQRCode')) {
-    /**
-     * Gera um QR Code em Base64 a partir de um texto/URL
-     * Usa a API QR Server (sem dependência externa)
-     *
-     * @param string $text  Texto ou URL para o QR Code
-     * @return string       Base64 da imagem PNG, ou string vazia em caso de falha
-     */
-    public function generateQRCode(string $text): string
-    {
-        if (empty($text)) {
-            Logger::warning('generateQRCode: texto vazio');
-            return '';
-        }
-
-        $url = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' . urlencode($text);
-
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 10,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-        ]);
-
-        $imageData = curl_exec($ch);
-        $httpCode  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
-        curl_close($ch);
-
-        if ($curlError) {
-            Logger::error('generateQRCode: cURL error', ['error' => $curlError, 'text_len' => strlen($text)]);
-            return '';
-        }
-
-        if ($imageData && strlen($imageData) > 100 && $httpCode === 200) {
-            Logger::debug('generateQRCode: sucesso', ['size_bytes' => strlen($imageData)]);
-            return base64_encode($imageData);
-        }
-
-        Logger::warning('generateQRCode: falhou ao gerar QR Code', [
-            'http_code' => $httpCode,
-            'text_len'  => strlen($text),
-        ]);
-        return '';
     }
 }
