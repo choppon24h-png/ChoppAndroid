@@ -258,4 +258,5 @@ if (DEBUG_MODE) {
         'REQUEST_URI' => $_SERVER['REQUEST_URI'] ?? 'N/A'
     ]);
 }
-?>
+// NOTA: Sem fechamento ?> intencional — evita emissão de whitespace/newline
+// que corromperia respostas JSON das APIs.

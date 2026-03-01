@@ -150,13 +150,23 @@ public class ServiceTools extends AppCompatActivity {
                     // O campo "status" no JSON indica se a TAP está ativa (1) ou não (0)
                     boolean ativa = true;
                     try {
+                        // Descarta prefixo indesejado (whitespace/warnings PHP)
+                        String jsonLimpo = json;
+                        int idx = json.indexOf('{');
+                        if (idx > 0) jsonLimpo = json.substring(idx);
+
+                        com.google.gson.JsonReader reader =
+                                new com.google.gson.JsonReader(new java.io.StringReader(jsonLimpo));
+                        reader.setLenient(true);
                         com.google.gson.JsonObject obj =
-                                com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                                com.google.gson.JsonParser.parseReader(reader).getAsJsonObject();
                         if (obj.has("status")) {
                             int status = obj.get("status").getAsInt();
                             ativa = (status == 1);
                         }
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                        Log.w(TAG, "Não foi possível parsear status da TAP: " + ignored.getMessage());
+                    }
 
                     final boolean estadoFinal = ativa;
                     runOnUiThread(() -> {
@@ -243,14 +253,29 @@ public class ServiceTools extends AppCompatActivity {
                     String  novoStatus = "";
                     String  mensagem   = "";
 
+                    // Extrai o JSON puro: descarta qualquer caractere antes do '{'
+                    // (whitespace, BOM, warnings PHP que escaparam do ob_clean)
+                    String jsonLimpo = json;
+                    int braceIdx = json.indexOf('{');
+                    if (braceIdx > 0) {
+                        Log.w(TAG, "JSON com prefixo indesejado (" + braceIdx + " chars). Descartando: ["
+                                + json.substring(0, braceIdx) + "]");
+                        jsonLimpo = json.substring(braceIdx);
+                    }
+
                     try {
+                        com.google.gson.JsonReader reader =
+                                new com.google.gson.JsonReader(new java.io.StringReader(jsonLimpo));
+                        reader.setLenient(true); // tolera JSON levemente malformado
                         com.google.gson.JsonObject obj =
-                                com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                                com.google.gson.JsonParser.parseReader(reader).getAsJsonObject();
                         sucesso    = obj.has("success") && obj.get("success").getAsBoolean();
                         novoStatus = obj.has("status")  ? obj.get("status").getAsString()  : "";
                         mensagem   = obj.has("message") ? obj.get("message").getAsString() : "";
+                        Log.d(TAG, "JSON parseado OK | success=" + sucesso + " status=" + novoStatus);
                     } catch (Exception e) {
-                        Log.e(TAG, "Erro ao parsear resposta toggle_tap: " + e.getMessage());
+                        Log.e(TAG, "Erro ao parsear resposta toggle_tap: " + e.getMessage()
+                                + " | JSON bruto: [" + json + "]");
                     }
 
                     final boolean ok        = sucesso;
