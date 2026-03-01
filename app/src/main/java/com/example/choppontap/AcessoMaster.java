@@ -118,7 +118,12 @@ public class AcessoMaster extends AppCompatActivity {
 
     private void liberarAcesso() {
         Toast.makeText(this, "Acesso Master Liberado", Toast.LENGTH_SHORT).show();
-        startActivity(new Intent(AcessoMaster.this, ServiceTools.class));
+        // Propaga a flag from_offline para o ServiceTools saber que deve
+        // oferecer a opção de ATIVAR a TAP (e não desativar)
+        boolean fromOffline = getIntent().getBooleanExtra("from_offline", false);
+        Intent intent = new Intent(AcessoMaster.this, ServiceTools.class);
+        intent.putExtra("from_offline", fromOffline);
+        startActivity(intent);
         finish();
     }
 

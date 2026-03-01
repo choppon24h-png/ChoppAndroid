@@ -1,307 +1,365 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/white"
-    android:padding="24dp">
+    android:fillViewport="true">
 
-    <ImageView
-        android:id="@+id/logoTools"
-        android:layout_width="250dp"
-        android:layout_height="70dp"
-        android:scaleType="fitCenter"
-        android:src="@drawable/logo_choppon"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <TextView
-        android:id="@+id/txtTituloTools"
-        android:layout_width="wrap_content"
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:text="Service Tools"
-        android:textColor="@color/black"
-        android:textSize="28sp"
-        android:textStyle="bold"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/logoTools" />
+        android:padding="24dp">
 
-    <!-- Info Card: IMEI / Bluetooth / Wi-Fi -->
-    <androidx.cardview.widget.CardView
-        android:id="@+id/cardInfo"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="32dp"
-        app:cardCornerRadius="12dp"
-        app:cardElevation="4dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/txtTituloTools">
+        <!-- ══════════════════════════════════════════════════════════════
+             LOGO
+             ══════════════════════════════════════════════════════════════ -->
+        <ImageView
+            android:id="@+id/logoTools"
+            android:layout_width="250dp"
+            android:layout_height="70dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/logo_choppon"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
 
-        <LinearLayout
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/txtTituloTools"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:layout_marginTop="24dp"
+            android:text="Service Tools"
+            android:textColor="@color/black"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/logoTools" />
 
-            <TextView
-                android:id="@+id/txtInfoImei"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="IMEI: Buscando..."
-                android:textColor="@color/black"
-                android:textSize="16sp" />
-
-            <TextView
-                android:id="@+id/txtInfoBluetooth"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Bluetooth: Desconectado"
-                android:textColor="@color/black"
-                android:textSize="16sp" />
-
-            <TextView
-                android:id="@+id/txtInfoWifi"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Wi-Fi: Desconectado"
-                android:textColor="@color/black"
-                android:textSize="16sp" />
-
-        </LinearLayout>
-    </androidx.cardview.widget.CardView>
-
-    <!-- Card: Status da Leitora de Cartão SumUp -->
-    <androidx.cardview.widget.CardView
-        android:id="@+id/cardLeitora"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        app:cardCornerRadius="12dp"
-        app:cardElevation="4dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/cardInfo">
-
-        <LinearLayout
-            android:layout_width="match_parent"
+        <!-- ══════════════════════════════════════════════════════════════
+             CARD: Info do Sistema (IMEI / Bluetooth / Wi-Fi)
+             ══════════════════════════════════════════════════════════════ -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/cardInfo"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:layout_marginTop="32dp"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/txtTituloTools">
 
-            <!-- Título do card -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
+                android:orientation="vertical"
+                android:padding="16dp">
 
                 <TextView
-                    android:layout_width="0dp"
+                    android:id="@+id/txtInfoImei"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Leitora de Cartão"
+                    android:text="IMEI: Buscando..."
                     android:textColor="@color/black"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
+                    android:textSize="16sp" />
 
-                <!-- Botão atualizar status -->
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnAtualizarLeitora"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
+                <TextView
+                    android:id="@+id/txtInfoBluetooth"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Atualizar"
-                    android:textColor="@color/choppon_orange"
-                    android:textSize="13sp"
-                    app:cornerRadius="8dp" />
+                    android:layout_marginTop="8dp"
+                    android:text="Bluetooth: Desconectado"
+                    android:textColor="@color/black"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:id="@+id/txtInfoWifi"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Wi-Fi: Desconectado"
+                    android:textColor="@color/black"
+                    android:textSize="16sp" />
 
             </LinearLayout>
+        </androidx.cardview.widget.CardView>
 
-            <!-- Linha separadora -->
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginTop="8dp"
-                android:layout_marginBottom="8dp"
-                android:background="#E0E0E0" />
+        <!-- ══════════════════════════════════════════════════════════════
+             CARD: Status da Leitora de Cartão SumUp
+             ══════════════════════════════════════════════════════════════ -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/cardLeitora"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/cardInfo">
 
-            <!-- Nome / Código da leitora -->
-            <TextView
-                android:id="@+id/txtLeitoraNome"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Leitora: Consultando..."
-                android:textColor="@color/black"
-                android:textSize="15sp" />
-
-            <!-- Status Online / Offline -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
+                android:orientation="vertical"
+                android:padding="16dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <!-- Título do card -->
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Status: "
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Leitora de Cartão"
+                        android:textColor="@color/black"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnAtualizarLeitora"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Atualizar"
+                        android:textColor="@color/choppon_orange"
+                        android:textSize="13sp"
+                        app:cornerRadius="8dp" />
+
+                </LinearLayout>
+
+                <!-- Linha separadora -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="8dp"
+                    android:background="#E0E0E0" />
+
+                <!-- Nome / Código da leitora -->
+                <TextView
+                    android:id="@+id/txtLeitoraNome"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Leitora: Consultando..."
                     android:textColor="@color/black"
                     android:textSize="15sp" />
 
-                <!-- Indicador colorido (bolinha) -->
-                <View
-                    android:id="@+id/viewStatusDot"
-                    android:layout_width="14dp"
-                    android:layout_height="14dp"
-                    android:layout_marginEnd="6dp"
-                    android:background="@drawable/circle_gray"
-                    android:layout_gravity="center_vertical" />
+                <!-- Status Online / Offline -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
 
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Status: "
+                        android:textColor="@color/black"
+                        android:textSize="15sp" />
+
+                    <View
+                        android:id="@+id/viewStatusDot"
+                        android:layout_width="14dp"
+                        android:layout_height="14dp"
+                        android:layout_marginEnd="6dp"
+                        android:background="@drawable/circle_gray"
+                        android:layout_gravity="center_vertical" />
+
+                    <TextView
+                        android:id="@+id/txtLeitoraStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Consultando..."
+                        android:textColor="#888888"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                </LinearLayout>
+
+                <!-- Status da API SumUp -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="API SumUp: "
+                        android:textColor="@color/black"
+                        android:textSize="15sp" />
+
+                    <View
+                        android:id="@+id/viewApiDot"
+                        android:layout_width="14dp"
+                        android:layout_height="14dp"
+                        android:layout_marginEnd="6dp"
+                        android:background="@drawable/circle_gray"
+                        android:layout_gravity="center_vertical" />
+
+                    <TextView
+                        android:id="@+id/txtApiStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Verificando..."
+                        android:textColor="#888888"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                </LinearLayout>
+
+                <!-- Bateria / Conexão / Firmware -->
+                <LinearLayout
+                    android:id="@+id/layoutLeitoraDetalhes"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/txtLeitoraBateria"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Bat: --"
+                        android:textColor="#555555"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/txtLeitoraConexao"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Rede: --"
+                        android:textColor="#555555"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/txtLeitoraFirmware"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="FW: --"
+                        android:textColor="#555555"
+                        android:textSize="13sp" />
+
+                </LinearLayout>
+
+                <!-- Mensagem de detalhes -->
                 <TextView
-                    android:id="@+id/txtLeitoraStatus"
+                    android:id="@+id/txtLeitoraMensagem"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text=""
+                    android:textColor="#666666"
+                    android:textSize="13sp" />
+
+                <!-- ProgressBar de carregamento -->
+                <ProgressBar
+                    android:id="@+id/progressLeitora"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Consultando..."
-                    android:textColor="#888888"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
+                    android:layout_gravity="center"
+                    android:layout_marginTop="4dp"
+                    android:visibility="gone" />
 
             </LinearLayout>
+        </androidx.cardview.widget.CardView>
 
-            <!-- Status da API SumUp -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
+        <!-- ══════════════════════════════════════════════════════════════
+             BOTÕES DE AÇÃO
+             ══════════════════════════════════════════════════════════════ -->
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="API SumUp: "
-                    android:textColor="@color/black"
-                    android:textSize="15sp" />
+        <!-- Calibração de Pulsos -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnCalibrarPulsos"
+            android:layout_width="0dp"
+            android:layout_height="70dp"
+            android:layout_marginTop="24dp"
+            android:backgroundTint="@color/choppon_orange"
+            android:text="Calibração de Pulsos"
+            android:textColor="@color/white"
+            android:textSize="18sp"
+            app:cornerRadius="12dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/cardLeitora" />
 
-                <View
-                    android:id="@+id/viewApiDot"
-                    android:layout_width="14dp"
-                    android:layout_height="14dp"
-                    android:layout_marginEnd="6dp"
-                    android:background="@drawable/circle_gray"
-                    android:layout_gravity="center_vertical" />
+        <!-- Tempo de Abertura -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnTempoAbertura"
+            android:layout_width="0dp"
+            android:layout_height="70dp"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/choppon_orange"
+            android:text="Tempo de Abertura"
+            android:textColor="@color/white"
+            android:textSize="18sp"
+            app:cornerRadius="12dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/btnCalibrarPulsos" />
 
-                <TextView
-                    android:id="@+id/txtApiStatus"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Verificando..."
-                    android:textColor="#888888"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
+        <!-- ══════════════════════════════════════════════════════════════
+             BOTÃO DESATIVAR / ATIVAR TAP  ← NOVO
+             ══════════════════════════════════════════════════════════════ -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnToggleTap"
+            android:layout_width="0dp"
+            android:layout_height="70dp"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="#F44336"
+            android:text="Desativar TAP"
+            android:textColor="@color/white"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_lock_power_off"
+            app:iconGravity="textStart"
+            app:iconTint="@color/white"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/btnTempoAbertura" />
 
-            </LinearLayout>
+        <!-- ProgressBar do toggle (visível durante a chamada API) -->
+        <ProgressBar
+            android:id="@+id/progressToggle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/btnToggleTap" />
 
-            <!-- Bateria / Conexão / Firmware -->
-            <LinearLayout
-                android:id="@+id/layoutLeitoraDetalhes"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal"
-                android:visibility="gone">
-                <TextView
-                    android:id="@+id/txtLeitoraBateria"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Bat: --"
-                    android:textColor="#555555"
-                    android:textSize="13sp" />
-                <TextView
-                    android:id="@+id/txtLeitoraConexao"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Rede: --"
-                    android:textColor="#555555"
-                    android:textSize="13sp" />
-                <TextView
-                    android:id="@+id/txtLeitoraFirmware"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="FW: --"
-                    android:textColor="#555555"
-                    android:textSize="13sp" />
-            </LinearLayout>
-            <!-- Mensagem de detalhes -->
-            <TextView
-                android:id="@+id/txtLeitoraMensagem"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text=""
-                android:textColor="#666666"
-                android:textSize="13sp" />
+        <!-- Botão Sair -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSairTools"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="24dp"
+            android:text="Sair"
+            android:textColor="@color/choppon_orange"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/progressToggle" />
 
-            <!-- ProgressBar de carregamento -->
-            <ProgressBar
-                android:id="@+id/progressLeitora"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:layout_marginTop="4dp"
-                android:visibility="gone" />
-
-        </LinearLayout>
-    </androidx.cardview.widget.CardView>
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnCalibrarPulsos"
-        android:layout_width="0dp"
-        android:layout_height="70dp"
-        android:layout_marginTop="24dp"
-        android:backgroundTint="@color/choppon_orange"
-        android:text="Calibração de Pulsos"
-        android:textColor="@color/white"
-        android:textSize="18sp"
-        app:cornerRadius="12dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/cardLeitora" />
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnTempoAbertura"
-        android:layout_width="0dp"
-        android:layout_height="70dp"
-        android:layout_marginTop="16dp"
-        android:backgroundTint="@color/choppon_orange"
-        android:text="Tempo de Abertura"
-        android:textColor="@color/white"
-        android:textSize="18sp"
-        app:cornerRadius="12dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btnCalibrarPulsos" />
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnSairTools"
-        style="@style/Widget.Material3.Button.TextButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
-        android:text="Sair"
-        android:textColor="@color/choppon_orange"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
-
-</androidx.constraintlayout.widget.ConstraintLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</ScrollView>

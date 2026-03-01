@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/background_offline_gradient">
+
+    <!-- ══════════════════════════════════════════════════════════════
+         LOGO CHOPP-ON (5 cliques = acesso Master)
+         ══════════════════════════════════════════════════════════════ -->
+    <ImageView
+        android:id="@+id/logoOffline"
+        android:layout_width="200dp"
+        android:layout_height="56dp"
+        android:layout_marginTop="48dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/logo_choppon"
+        android:alpha="0.85"
+        android:clickable="true"
+        android:focusable="true"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Linha sutil abaixo do logo -->
+    <View
+        android:id="@+id/dividerLogo"
+        android:layout_width="0dp"
+        android:layout_height="1dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginStart="48dp"
+        android:layout_marginEnd="48dp"
+        android:background="#33FFFFFF"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/logoOffline" />
+
+    <!-- ══════════════════════════════════════════════════════════════
+         BLOCO CENTRAL — Ícone + Textos
+         ══════════════════════════════════════════════════════════════ -->
+    <LinearLayout
+        android:id="@+id/layoutCentral"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:layout_marginStart="32dp"
+        android:layout_marginEnd="32dp"
+        app:layout_constraintBottom_toTopOf="@+id/layoutNextTap"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/dividerLogo"
+        app:layout_constraintVertical_bias="0.45">
+
+        <!-- Ícone de torneira offline (com animação pulsante via código) -->
+        <ImageView
+            android:id="@+id/icTapOffline"
+            android:layout_width="130dp"
+            android:layout_height="130dp"
+            android:src="@drawable/ic_tap_offline"
+            android:layout_marginBottom="24dp" />
+
+        <!-- Badge OFFLINE -->
+        <TextView
+            android:id="@+id/badgeOffline"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="● OFFLINE"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.15"
+            android:background="@drawable/offline_badge_bg"
+            android:layout_marginBottom="20dp" />
+
+        <!-- Título principal -->
+        <TextView
+            android:id="@+id/txtTapOffline"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="TAP OFFLINE"
+            android:textColor="#FFFFFF"
+            android:textSize="42sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.05"
+            android:layout_marginBottom="12dp" />
+
+        <!-- Subtítulo -->
+        <TextView
+            android:id="@+id/txtSubtitulo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Esta torneira está temporariamente\nfora de operação."
+            android:textColor="#AAAAAA"
+            android:textSize="16sp"
+            android:gravity="center"
+            android:lineSpacingMultiplier="1.4"
+            android:layout_marginBottom="8dp" />
+
+    </LinearLayout>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         BLOCO INFERIOR — Instrução de próxima TAP
+         ══════════════════════════════════════════════════════════════ -->
+    <LinearLayout
+        android:id="@+id/layoutNextTap"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:layout_marginStart="32dp"
+        android:layout_marginEnd="32dp"
+        android:layout_marginBottom="56dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <!-- Linha separadora -->
+        <View
+            android:layout_width="60dp"
+            android:layout_height="1dp"
+            android:background="#33FFFFFF"
+            android:layout_marginBottom="24dp" />
+
+        <!-- Ícone de direção (seta + pessoa) -->
+        <ImageView
+            android:id="@+id/icNextTap"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:src="@drawable/ic_next_tap"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Texto de instrução -->
+        <TextView
+            android:id="@+id/txtDirijase"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Dirija-se ao próximo TAP"
+            android:textColor="#FF8C00"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:layout_marginBottom="6dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Outras torneiras estão disponíveis para atendê-lo."
+            android:textColor="#888888"
+            android:textSize="13sp"
+            android:gravity="center" />
+
+    </LinearLayout>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         CONTADOR SECRETO (invisível, para feedback visual dos cliques)
+         ══════════════════════════════════════════════════════════════ -->
+    <TextView
+        android:id="@+id/txtSecretHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="#33FFFFFF"
+        android:textSize="10sp"
+        android:layout_marginTop="8dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/logoOffline"
+        android:visibility="invisible" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

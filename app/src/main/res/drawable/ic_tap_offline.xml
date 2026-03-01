@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Corpo da torneira (barril) -->
+    <path
+        android:fillColor="#CCCCCC"
+        android:pathData="M30,45 L90,45 L90,90 Q90,100 80,100 L40,100 Q30,100 30,90 Z" />
+
+    <!-- Tampa do barril -->
+    <path
+        android:fillColor="#AAAAAA"
+        android:pathData="M25,38 L95,38 Q95,45 60,45 Q25,45 25,38 Z" />
+
+    <!-- Bico da torneira -->
+    <path
+        android:fillColor="#AAAAAA"
+        android:pathData="M52,100 L68,100 L68,112 L52,112 Z" />
+
+    <!-- Alavanca da torneira -->
+    <path
+        android:fillColor="#888888"
+        android:pathData="M58,55 L62,55 L62,75 L58,75 Z" />
+    <path
+        android:fillColor="#888888"
+        android:pathData="M50,52 L70,52 L70,58 L50,58 Z" />
+
+    <!-- X vermelho indicando OFFLINE -->
+    <path
+        android:strokeColor="#F44336"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M75,20 L100,45"
+        android:fillColor="#00000000" />
+    <path
+        android:strokeColor="#F44336"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M100,20 L75,45"
+        android:fillColor="#00000000" />
+
+    <!-- Círculo ao redor do X -->
+    <path
+        android:strokeColor="#F44336"
+        android:strokeWidth="4"
+        android:fillColor="#00000000"
+        android:pathData="M87.5,10 m-20,0 a20,20 0,1 1,40 0 a20,20 0,1 1,-40 0" />
+
+</vector>

@@ -163,22 +163,57 @@ public class Home extends AppCompatActivity {
             @Override public void onResponse(Call call, Response response) throws IOException {
                 try (ResponseBody rb = response.body()) {
                     if (response.isSuccessful()) {
-                        Tap tap = new Gson().fromJson(rb.string(), Tap.class);
+                        String jsonStr = rb.string();
+                        Log.d("HOME", "verify_tap resposta: " + jsonStr);
+
+                        Tap tap = new Gson().fromJson(jsonStr, Tap.class);
                         if (tap == null || tap.bebida == null || tap.bebida.isEmpty()) {
                             redirecionarImei();
-                        } else {
-                            boolean cartaoHabilitado = (tap.cartao != null) && tap.cartao;
-                            Sqlite banco = new Sqlite(getApplicationContext());
-                            banco.tapCartao(cartaoHabilitado);
-                            runOnUiThread(() -> updateFields(tap.bebida, tap.preco, tap.image));
+                            return;
                         }
+
+                        // ── Verificar se a TAP está DESATIVADA (status = 0) ──────────
+                        // O campo "status" é retornado pelo verify_tap.php.
+                        // Se status == 0, a TAP foi desativada pelo técnico via ServiceTools.
+                        try {
+                            com.google.gson.JsonObject obj =
+                                    com.google.gson.JsonParser.parseString(jsonStr).getAsJsonObject();
+                            if (obj.has("status")) {
+                                int tapStatus = obj.get("status").getAsInt();
+                                if (tapStatus == 0) {
+                                    Log.w("HOME", "TAP está DESATIVADA (status=0). Redirecionando para OfflineTap.");
+                                    redirecionarOffline();
+                                    return;
+                                }
+                            }
+                        } catch (Exception ignored) {
+                            Log.w("HOME", "Não foi possível verificar campo status da TAP.");
+                        }
+
+                        // TAP ativa — prossegue normalmente
+                        boolean cartaoHabilitado = (tap.cartao != null) && tap.cartao;
+                        Sqlite banco = new Sqlite(getApplicationContext());
+                        banco.tapCartao(cartaoHabilitado);
+                        runOnUiThread(() -> updateFields(tap.bebida, tap.preco, tap.image));
+
                     } else {
                         redirecionarImei();
                     }
                 } catch (Exception e) {
+                    Log.e("HOME", "Erro ao processar verify_tap: " + e.getMessage());
                     redirecionarImei();
                 }
             }
+        });
+    }
+
+    private void redirecionarOffline() {
+        runOnUiThread(() -> {
+            Log.i("HOME", "Navegando para OfflineTap");
+            Intent intent = new Intent(Home.this, OfflineTap.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            finish();
         });
     }
 

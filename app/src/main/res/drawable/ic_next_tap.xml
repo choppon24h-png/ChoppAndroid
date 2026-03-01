@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="80dp"
+    android:height="80dp"
+    android:viewportWidth="80"
+    android:viewportHeight="80">
+
+    <!-- Círculo de fundo -->
+    <path
+        android:fillColor="#FF8C00"
+        android:pathData="M40,40m-38,0a38,38 0,1 1,76 0a38,38 0,1 1,-76 0" />
+
+    <!-- Seta para a direita (ícone de navegação) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,40 L52,40 M44,32 L52,40 L44,48"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Pessoa (ícone de pessoa caminhando) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,18 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,26 L44,26 L46,36 L42,36 L42,46 L38,46 L38,36 L34,36 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,36 L30,44 M46,36 L50,44"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round" />
+
+</vector>

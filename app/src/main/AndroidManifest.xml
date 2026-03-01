@@ -84,6 +84,13 @@
             android:screenOrientation="reversePortrait"
             android:theme="@style/Theme.ChoppOnTap" />
 
+        <!-- Tela OFFLINE: exibida quando a TAP é desativada pelo técnico -->
+        <activity
+            android:name=".OfflineTap"
+            android:exported="false"
+            android:screenOrientation="reversePortrait"
+            android:theme="@style/Theme.ChoppOnTap" />
+
         <service
             android:name=".BluetoothService"
             android:enabled="true" />
