@@ -65,21 +65,29 @@ try {
     $conn = getDBConnection();
 
     // Busca a TAP pelo android_id
+    // CORRECAO: a tabela 'tap' nao possui coluna 'nome'.
+    // Os campos reais sao: id, reader_id, android_id, esp32_mac,
+    // volume, volume_consumido, bebida_id, last_call, status.
     $stmt = $conn->prepare(
-        "SELECT id, nome, status FROM tap WHERE android_id = ? LIMIT 1"
+        "SELECT id, reader_id, android_id, status FROM tap WHERE android_id = ? LIMIT 1"
     );
     $stmt->execute([$android_id]);
     $tap = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$tap) {
-        Logger::warning($TAG, "TAP não encontrada para android_id=$android_id");
+        Logger::warning($TAG, "TAP nao encontrada para android_id=$android_id");
         $response = [
             'success' => false,
-            'error'   => 'TAP não encontrada para este dispositivo.'
+            'error'   => 'TAP nao encontrada para este dispositivo.'
         ];
         $httpCode = 404;
         throw new RuntimeException('tap_not_found');
     }
+
+    // Identificador descritivo para logs (reader_id ou android_id como fallback)
+    $tapLabel = !empty($tap['reader_id'])
+        ? $tap['reader_id']
+        : 'android/' . $tap['android_id'];
 
     // Define o novo status
     $novoStatus  = ($action === 'desativar') ? 0 : 1;
@@ -90,7 +98,7 @@ try {
     $stmtUpdate->execute([$novoStatus, $tap['id']]);
 
     Logger::info($TAG,
-        "TAP '{$tap['nome']}' (id={$tap['id']}) alterada para status=$statusLabel"
+        "TAP '$tapLabel' (id={$tap['id']}) alterada para status=$statusLabel"
     );
 
     $response = [
@@ -100,7 +108,7 @@ try {
             ? 'TAP desativada com sucesso. Redirecionando para tela OFFLINE.'
             : 'TAP ativada com sucesso. Retornando ao funcionamento normal.',
         'tap_id'   => (int) $tap['id'],
-        'tap_nome' => $tap['nome']
+        'tap_nome' => $tapLabel
     ];
     $httpCode = 200;
 
