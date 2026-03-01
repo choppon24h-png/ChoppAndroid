@@ -226,8 +226,8 @@ public class FormaPagamento extends AppCompatActivity {
                                 txtInstrucaoCartao.setText(msg);
                                 startBlinkingSeta();
                             });
-                            startCountDown(60);
-                            startVerifing(qr.checkout_id, 60);
+                            startCountDown(120);
+                            startVerifing(qr.checkout_id, 120);
                         }
                     } else {
                         runOnUiThread(() -> showErrorMessage("Dados inválidos do servidor."));
