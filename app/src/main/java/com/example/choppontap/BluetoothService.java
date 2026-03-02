@@ -136,13 +136,19 @@ public class BluetoothService extends Service {
     }
 
     public void scanLeDevice(boolean enable) {
-        if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()) return;
+        if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()) {
+            Log.w(TAG, "scanLeDevice: Bluetooth desabilitado ou não disponível");
+            return;
+        }
         if (connected()) {
+            Log.d(TAG, "scanLeDevice: já conectado, broadcast connected");
             broadcastConnectionStatus("connected");
             return;
         }
 
         if (mTargetMac != null && !mScanning) {
+            Log.i(TAG, "scanLeDevice: MAC salvo encontrado (" + mTargetMac + "), conectando diretamente...");
+            broadcastConnectionStatus("conectando...");
             connectToDevice(mBluetoothAdapter.getRemoteDevice(mTargetMac));
             return;
         }
@@ -190,6 +196,17 @@ public class BluetoothService extends Service {
     public void disconnect() {
         mAutoReconnect = false;
         closeGatt();
+        Log.i(TAG, "disconnect() chamado — mAutoReconnect=false, GATT fechado");
+    }
+
+    /**
+     * Reabilita o auto-reconnect após uma desativação intencional da TAP.
+     * Deve ser chamado pela Home antes de iniciar o scan, para garantir que
+     * quedas de conexão sejam recuperadas automaticamente.
+     */
+    public void enableAutoReconnect() {
+        mAutoReconnect = true;
+        Log.i(TAG, "enableAutoReconnect() — mAutoReconnect=true");
     }
 
     private void closeGatt() {
