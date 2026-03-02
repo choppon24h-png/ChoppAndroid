@@ -84,14 +84,24 @@ public class Home extends AppCompatActivity {
         }
     };
 
+    // Flag para saber se a Home foi recriada após uma ativação de TAP
+    private boolean mRecarregarAposAtivacao = false;
+
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
             mIsServiceBound = true;
-            if (!mBluetoothService.connected()) mBluetoothService.scanLeDevice(true);
+            Log.i("HOME", "BluetoothService conectado. Estado BT: " + (mBluetoothService.connected() ? "CONECTADO" : "DESCONECTADO"));
+            if (!mBluetoothService.connected()) {
+                Log.i("HOME", "Iniciando scan BLE para reconectar ao ESP32...");
+                mBluetoothService.scanLeDevice(true);
+            }
         }
-        @Override public void onServiceDisconnected(ComponentName name) { mIsServiceBound = false; }
+        @Override public void onServiceDisconnected(ComponentName name) {
+            mIsServiceBound = false;
+            mBluetoothService = null;
+        }
     };
 
     @Override
@@ -110,13 +120,15 @@ public class Home extends AppCompatActivity {
             bebida = extras.getString("bebida");
             valorBase = extras.getFloat("preco", 0.0f);
             imagemUrl = extras.getString("imagem");
-            
+
             boolean cartaoHabilitado = extras.getBoolean("cartao", false);
             Sqlite banco = new Sqlite(getApplicationContext());
             banco.tapCartao(cartaoHabilitado);
 
             updateFields(bebida, valorBase, imagemUrl);
         } else {
+            // Sempre recarrega os dados ao criar a Home (inclui caso de reativação via ServiceTools)
+            Log.i("HOME", "onCreate: carregando dados da TAP via verify_tap.php");
             sendRequestCheckSecurity();
         }
 
@@ -212,9 +224,16 @@ public class Home extends AppCompatActivity {
 
     private void redirecionarOffline() {
         runOnUiThread(() -> {
-            Log.i("HOME", "Navegando para OfflineTap");
+            Log.i("HOME", "TAP desativada → desconectando BT e navegando para OfflineTap");
+            // Desconecta o Bluetooth antes de ir para a tela OFFLINE
+            if (mIsServiceBound && mBluetoothService != null) {
+                mBluetoothService.disconnect();
+                Log.i("HOME", "Bluetooth desconectado pelo Home ao detectar tap_status=0");
+            }
             Intent intent = new Intent(Home.this, OfflineTap.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             startActivity(intent);
             finish();
         });
@@ -328,6 +347,13 @@ public class Home extends AppCompatActivity {
         secretClickCount = 0;
         IntentFilter filter = new IntentFilter(BluetoothService.ACTION_CONNECTION_STATUS);
         LocalBroadcastManager.getInstance(this).registerReceiver(mServiceUpdateReceiver, filter);
+
+        // Garante que o BT está tentando reconectar ao voltar para a Home
+        // (ex: após retornar de FormaPagamento ou PagamentoConcluido)
+        if (mIsServiceBound && mBluetoothService != null && !mBluetoothService.connected()) {
+            Log.i("HOME", "onResume: BT desconectado, reiniciando scan...");
+            mBluetoothService.scanLeDevice(true);
+        }
     }
 
     @Override
