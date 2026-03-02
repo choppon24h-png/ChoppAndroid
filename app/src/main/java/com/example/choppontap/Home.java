@@ -172,22 +172,25 @@ public class Home extends AppCompatActivity {
                             return;
                         }
 
-                        // ── Verificar se a TAP está DESATIVADA (status = 0) ──────────
-                        // O campo "status" é retornado pelo verify_tap.php.
-                        // Se status == 0, a TAP foi desativada pelo técnico via ServiceTools.
+                        // ── Verificar se a TAP está DESATIVADA ───────────────────────
+                        // FIX: usa o novo campo "tap_status" retornado pelo verify_tap.php v1.1.
+                        // Mantém fallback para "status" por compatibilidade com versões antigas.
                         try {
                             com.google.gson.JsonObject obj =
                                     com.google.gson.JsonParser.parseString(jsonStr).getAsJsonObject();
-                            if (obj.has("status")) {
-                                int tapStatus = obj.get("status").getAsInt();
-                                if (tapStatus == 0) {
-                                    Log.w("HOME", "TAP está DESATIVADA (status=0). Redirecionando para OfflineTap.");
-                                    redirecionarOffline();
-                                    return;
-                                }
+                            int tapStatus = -1;
+                            if (obj.has("tap_status")) {
+                                tapStatus = obj.get("tap_status").getAsInt();
+                            } else if (obj.has("status")) {
+                                tapStatus = obj.get("status").getAsInt();
+                            }
+                            if (tapStatus == 0) {
+                                Log.w("HOME", "TAP está DESATIVADA (tap_status=0). Redirecionando para OfflineTap.");
+                                redirecionarOffline();
+                                return;
                             }
                         } catch (Exception ignored) {
-                            Log.w("HOME", "Não foi possível verificar campo status da TAP.");
+                            Log.w("HOME", "Não foi possível verificar campo tap_status da TAP.");
                         }
 
                         // TAP ativa — prossegue normalmente

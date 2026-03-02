@@ -126,7 +126,11 @@ public class ServiceTools extends AppCompatActivity {
                         // ✅ CORREÇÃO: Usando parseString para evitar erro de JsonReader
                         com.google.gson.JsonObject obj =
                                 com.google.gson.JsonParser.parseString(jsonLimpo).getAsJsonObject();
-                        if (obj.has("status")) {
+                        // FIX: suporta tanto o campo legado "status" quanto o novo "tap_status"
+                        if (obj.has("tap_status")) {
+                            int status = obj.get("tap_status").getAsInt();
+                            ativa = (status == 1);
+                        } else if (obj.has("status")) {
                             int status = obj.get("status").getAsInt();
                             ativa = (status == 1);
                         }
@@ -224,7 +228,13 @@ public class ServiceTools extends AppCompatActivity {
                             atualizarBotaoToggle();
                             
                             if (!tapAtiva) {
-                                startActivity(new Intent(ServiceTools.this, Home.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                                // FIX: ao desativar, navegar para OfflineTap (não para Home)
+                                // Home.java chamaria verify_tap novamente e, sem tap_status,
+                                // não saberia que a TAP está offline — voltando para Home em loop.
+                                Log.i(TAG, "TAP desativada → navegando para OfflineTap");
+                                Intent intent = new Intent(ServiceTools.this, OfflineTap.class);
+                                intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+                                startActivity(intent);
                                 finishAffinity();
                             } else {
                                 Toast.makeText(ServiceTools.this, "TAP ativada!", Toast.LENGTH_SHORT).show();
