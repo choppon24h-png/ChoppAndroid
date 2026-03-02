@@ -1,6 +1,8 @@
 package com.example.choppontap;
 
 import android.content.BroadcastReceiver;
+import android.view.animation.Animation;
+import android.view.animation.AnimationUtils;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -211,12 +213,12 @@ public class Home extends AppCompatActivity {
     // ─────────────────────────────────────────────────────────────────────────
 
     private void setupUI() {
-        txtBebida  = findViewById(R.id.txtBebida);
-        imageView  = findViewById(R.id.imageBeer2);
-        btn100     = findViewById(R.id.btn100);
-        btn300     = findViewById(R.id.btn300);
-        btn500     = findViewById(R.id.btn500);
-        btn700     = findViewById(R.id.btn700);
+        txtBebida   = findViewById(R.id.txtBebida);
+        imageView   = findViewById(R.id.imageBeer2);
+        btn100      = findViewById(R.id.btn100);
+        btn300      = findViewById(R.id.btn300);
+        btn500      = findViewById(R.id.btn500);
+        btn700      = findViewById(R.id.btn700);
         logoChoppOn = findViewById(R.id.logoChoppOn);
 
         LinearLayout statusContainer = findViewById(R.id.bluetooth_status_container);
@@ -225,10 +227,14 @@ public class Home extends AppCompatActivity {
         // Botões desabilitados até BLE conectar
         changeButtons(false);
 
-        btn100.setOnClickListener(v -> openIntent(1));
-        btn300.setOnClickListener(v -> openIntent(3));
-        btn500.setOnClickListener(v -> openIntent(5));
-        btn700.setOnClickListener(v -> openIntent(7));
+        // Volumes: btn100=300ml, btn300=500ml, btn500=700ml, btn700=1000ml
+        btn100.setOnClickListener(v -> openIntent(3));
+        btn300.setOnClickListener(v -> openIntent(5));
+        btn500.setOnClickListener(v -> openIntent(7));
+        btn700.setOnClickListener(v -> openIntent(10));
+
+        // Animação de pulso — convida o cliente a clicar
+        startPulseAnimation();
 
         // Easter egg: 5 cliques no logo → AcessoMaster
         logoChoppOn.setOnClickListener(v -> {
@@ -343,22 +349,54 @@ public class Home extends AppCompatActivity {
         carregarImagem(imageUrl);
     }
 
+    /**
+     * Inicia a animação de pulso nos 4 botões.
+     * Cada botão começa com um pequeno atraso para criar efeito cascata.
+     */
+    private void startPulseAnimation() {
+        if (btn100 == null) return;
+        Animation pulse = AnimationUtils.loadAnimation(this, R.anim.pulse_scale);
+        Animation pulse2 = AnimationUtils.loadAnimation(this, R.anim.pulse_scale);
+        Animation pulse3 = AnimationUtils.loadAnimation(this, R.anim.pulse_scale);
+        Animation pulse4 = AnimationUtils.loadAnimation(this, R.anim.pulse_scale);
+        // Atraso escalonado para efeito cascata
+        pulse.setStartOffset(0);
+        pulse2.setStartOffset(180);
+        pulse3.setStartOffset(360);
+        pulse4.setStartOffset(540);
+        btn100.startAnimation(pulse);
+        btn300.startAnimation(pulse2);
+        btn500.startAnimation(pulse3);
+        btn700.startAnimation(pulse4);
+        Log.d(TAG, "Animação de pulso iniciada nos 4 botões");
+    }
+
+    /**
+     * Para a animação de pulso (ex: quando BLE desconecta e botões ficam cinza).
+     */
+    private void stopPulseAnimation() {
+        if (btn100 == null) return;
+        btn100.clearAnimation();
+        btn300.clearAnimation();
+        btn500.clearAnimation();
+        btn700.clearAnimation();
+    }
+
     public void updateValue(Float value) {
         if (btn100 == null) return;
-        // PROBLEMA IDENTIFICADO: se value for null ou 0, os botões mostram "R$ 0,00"
-        // CORREÇÃO: mantém o texto de volume mas exibe "---" no preço até carregar
+        // Volumes: btn100=300ml, btn300=500ml, btn500=700ml, btn700=1000ml
         if (value == null || value == 0f) {
             Log.w(TAG, "updateValue: preço nulo ou zero — aguardando dados da API");
-            btn100.setText("100 ml");
-            btn300.setText("300 ml");
-            btn500.setText("500 ml");
-            btn700.setText("700 ml");
+            btn100.setText("300 ml");
+            btn300.setText("500 ml");
+            btn500.setText("700 ml");
+            btn700.setText("1000 ml");
             return;
         }
-        btn100.setText("100 ml \nR$ " + String.format("%.2f", value).replace(".", ","));
-        btn300.setText("300 ml \nR$ " + String.format("%.2f", value * 3).replace(".", ","));
-        btn500.setText("500 ml \nR$ " + String.format("%.2f", value * 5).replace(".", ","));
-        btn700.setText("700 ml \nR$ " + String.format("%.2f", value * 7).replace(".", ","));
+        btn100.setText("300 ml\nR$ " + String.format("%.2f", value * 3).replace(".", ","));
+        btn300.setText("500 ml\nR$ " + String.format("%.2f", value * 5).replace(".", ","));
+        btn500.setText("700 ml\nR$ " + String.format("%.2f", value * 7).replace(".", ","));
+        btn700.setText("1000 ml\nR$ " + String.format("%.2f", value * 10).replace(".", ","));
     }
 
     /**
@@ -419,11 +457,17 @@ public class Home extends AppCompatActivity {
 
     public void changeButtons(Boolean enabled) {
         if (btn100 == null) return;
-        int color = enabled ? Color.WHITE : Color.GRAY;
+        int color = enabled ? Color.WHITE : Color.LTGRAY;
         btn100.setEnabled(enabled); btn100.setTextColor(color);
         btn300.setEnabled(enabled); btn300.setTextColor(color);
         btn500.setEnabled(enabled); btn500.setTextColor(color);
         btn700.setEnabled(enabled); btn700.setTextColor(color);
+        // Pulso ativo só quando BLE conectado
+        if (enabled) {
+            startPulseAnimation();
+        } else {
+            stopPulseAnimation();
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -458,12 +502,19 @@ public class Home extends AppCompatActivity {
     // Navegação
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Abre a tela de pagamento.
+     * @param multiplicador fator de volume: 3=300ml, 5=500ml, 7=700ml, 10=1000ml
+     */
     protected void openIntent(Integer multiplicador) {
         if (mBluetoothService != null && mBluetoothService.connected()) {
+            int volumeMl = multiplicador * 100;
+            float valor  = valorBase != null ? valorBase * multiplicador : 0f;
             Intent it = new Intent(Home.this, FormaPagamento.class);
-            it.putExtra("quantidade", multiplicador * 100);
-            it.putExtra("valor", valorBase != null ? valorBase * multiplicador : 0f);
-            it.putExtra("descricao", bebida + " " + (multiplicador * 100) + "ml");
+            it.putExtra("quantidade", volumeMl);
+            it.putExtra("valor", valor);
+            it.putExtra("descricao", bebida + " " + volumeMl + "ml");
+            Log.i(TAG, "Abrindo pagamento: " + volumeMl + "ml R$" + valor);
             startActivity(it);
         } else {
             Toast.makeText(this, "Aguardando conexão Bluetooth...", Toast.LENGTH_SHORT).show();
