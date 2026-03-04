@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    pulse_scale.xml — Animação de pulso contínuo (infinito)
+    ─────────────────────────────────────────────────────────
+    Usado pelo OfflineTap.java para o ícone da torneira.
+    Para os botões de volume da Home, usar pulse_scale_once.xml
+    (pulsação única, disparada aleatoriamente via Home.java).
+-->
 <set xmlns:android="http://schemas.android.com/apk/res/android"
     android:interpolator="@android:anim/accelerate_decelerate_interpolator">
 

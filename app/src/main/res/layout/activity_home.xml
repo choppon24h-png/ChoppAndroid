@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    activity_home.xml — Layout v2.0
+    activity_home.xml — Layout v2.1
     ─────────────────────────────────────────────────────────────────────────
-    Mudanças:
-      • Imagem: margens 8dp, proporção 4:3, scaleType=centerCrop (sem distorção)
-      • Nome da bebida: 30sp, negrito, sem label "Bebida" acima
-      • Botões: grade 2×2 — 300ml | 500ml / 700ml | 1000ml
-      • Botões menores (ratio 1.6:1) para caber na tela
-      • Animação de pulso aplicada via Home.java
+    Mudanças v2.1:
+      • Nome da bebida: cor preta brilhante (#1A1A1A) em vez de laranja
+      • Subtítulo "Selecione o volume desejado": cor laranja (#FF8C00)
+      • Botões: todos com a mesma cor laranja (#FF8C00) — unificado
+      • Fonte dos botões aumentada de 17sp para 22sp (ml e valor mais visíveis)
+      • Pulso: removido pulso contínuo em cascata — pulsação aleatória via Home.java
     ─────────────────────────────────────────────────────────────────────────
 -->
 <androidx.constraintlayout.widget.ConstraintLayout
@@ -68,7 +68,7 @@
     </androidx.cardview.widget.CardView>
 
     <!-- ── Nome da Bebida ─────────────────────────────────────────────
-         30sp, negrito, laranja — destaque máximo para o cliente.
+         30sp, negrito, preto brilhante — destaque máximo para o cliente.
     ─────────────────────────────────────────────────────────────────── -->
     <TextView
         android:id="@+id/txtBebida"
@@ -79,7 +79,7 @@
         android:layout_marginEnd="8dp"
         android:text="Carregando..."
         android:textAlignment="center"
-        android:textColor="#FF8C00"
+        android:textColor="#1A1A1A"
         android:textSize="30sp"
         android:textStyle="bold"
         android:maxLines="2"
@@ -96,7 +96,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
         android:text="Selecione o volume desejado:"
-        android:textColor="#888888"
+        android:textColor="#FF8C00"
         android:textSize="12sp"
         android:textStyle="italic"
         app:layout_constraintEnd_toEndOf="parent"
@@ -108,6 +108,7 @@
          Linha 1: btn100 = 300ml  |  btn300 = 500ml
          Linha 2: btn500 = 700ml  |  btn700 = 1000ml
          ratio 1.6:1 → botões achatados, cabem na tela com a imagem
+         Todos com a mesma cor laranja #FF8C00 — muda ao selecionar via Java
     ══════════════════════════════════════════════════════════════════ -->
 
     <!-- Linha 1 — Esquerda: 300ml -->
@@ -121,7 +122,7 @@
         android:backgroundTint="#FF8C00"
         android:text="300 ml\nR$ 0,00"
         android:textColor="#FFFFFF"
-        android:textSize="17sp"
+        android:textSize="22sp"
         android:textStyle="bold"
         android:gravity="center"
         android:lineSpacingMultiplier="1.1"
@@ -142,7 +143,7 @@
         android:backgroundTint="#FF8C00"
         android:text="500 ml\nR$ 0,00"
         android:textColor="#FFFFFF"
-        android:textSize="17sp"
+        android:textSize="22sp"
         android:textStyle="bold"
         android:gravity="center"
         android:lineSpacingMultiplier="1.1"
@@ -159,10 +160,10 @@
         android:layout_height="0dp"
         android:layout_marginTop="8dp"
         android:layout_marginEnd="4dp"
-        android:backgroundTint="#E07000"
+        android:backgroundTint="#FF8C00"
         android:text="700 ml\nR$ 0,00"
         android:textColor="#FFFFFF"
-        android:textSize="17sp"
+        android:textSize="22sp"
         android:textStyle="bold"
         android:gravity="center"
         android:lineSpacingMultiplier="1.1"
@@ -178,10 +179,10 @@
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:layout_marginTop="8dp"
-        android:backgroundTint="#E07000"
+        android:backgroundTint="#FF8C00"
         android:text="1000 ml\nR$ 0,00"
         android:textColor="#FFFFFF"
-        android:textSize="17sp"
+        android:textSize="22sp"
         android:textStyle="bold"
         android:gravity="center"
         android:lineSpacingMultiplier="1.1"

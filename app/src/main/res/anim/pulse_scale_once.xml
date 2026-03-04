@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    pulse_scale_once.xml — Animação de pulso único para botões de volume
+    ─────────────────────────────────────────────────────────────────────
+    Usado pela pulsação aleatória em Home.java:
+    • Um botão aleatório recebe este pulso por vez (repeatCount=1)
+    • A animação escala o botão de 1.0 → 1.08 e volta, com suavização
+    • Duração curta (400ms) para resposta visual rápida e agradável
+-->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:anim/accelerate_decelerate_interpolator">
+
+    <scale
+        android:fromXScale="1.0"
+        android:toXScale="1.08"
+        android:fromYScale="1.0"
+        android:toYScale="1.08"
+        android:pivotX="50%"
+        android:pivotY="50%"
+        android:duration="400"
+        android:repeatMode="reverse"
+        android:repeatCount="1" />
+
+</set>

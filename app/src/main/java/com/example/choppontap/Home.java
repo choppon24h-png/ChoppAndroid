@@ -27,11 +27,13 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
+import com.google.android.material.button.MaterialButton;
 import com.google.gson.Gson;
 
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -45,11 +47,17 @@ public class Home extends AppCompatActivity {
 
     private static final String TAG = "HOME";
 
+    // ── Cores dos botões ──────────────────────────────────────────────────────
+    /** Cor padrão (laranja) de todos os botões quando nenhum está selecionado */
+    private static final int COLOR_BTN_DEFAULT  = 0xFFFF8C00;
+    /** Cor do botão quando selecionado (verde-escuro para contraste) */
+    private static final int COLOR_BTN_SELECTED = 0xFF2E7D32;
+
     // ── Views ─────────────────────────────────────────────────────────────────
     private TextView txtBebida;
     private ImageView imageView;
     private ImageView logoChoppOn;
-    private Button btn100, btn300, btn500, btn700;
+    private MaterialButton btn100, btn300, btn500, btn700;
     private BluetoothStatusIndicator bluetoothStatusIndicator;
 
     // ── Estado da TAP ─────────────────────────────────────────────────────────
@@ -61,6 +69,18 @@ public class Home extends AppCompatActivity {
     // ── Easter egg ────────────────────────────────────────────────────────────
     private int secretClickCount = 0;
     private final Handler handler = new Handler();
+
+    // ── Pulsação aleatória ────────────────────────────────────────────────────
+    /** Handler dedicado ao agendamento da pulsação aleatória */
+    private final Handler pulseHandler = new Handler();
+    /** Gerador de números aleatórios para escolha do botão e do intervalo */
+    private final Random pulseRandom = new Random();
+    /** Controla se o loop de pulsação aleatória está ativo */
+    private boolean pulseRunning = false;
+    /** Intervalo mínimo entre pulsações (ms) */
+    private static final int PULSE_MIN_INTERVAL_MS = 800;
+    /** Intervalo máximo entre pulsações (ms) */
+    private static final int PULSE_MAX_INTERVAL_MS = 2500;
 
     // ── Carregamento de imagem ────────────────────────────────────────────────
     private final ExecutorService imageExecutor = Executors.newSingleThreadExecutor();
@@ -200,6 +220,7 @@ public class Home extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        stopRandomPulse();
         if (currentImageTask != null) currentImageTask.cancel(true);
         imageExecutor.shutdown();
         if (mIsServiceBound) {
@@ -228,13 +249,22 @@ public class Home extends AppCompatActivity {
         changeButtons(false);
 
         // Volumes: btn100=300ml, btn300=500ml, btn500=700ml, btn700=1000ml
-        btn100.setOnClickListener(v -> openIntent(3));
-        btn300.setOnClickListener(v -> openIntent(5));
-        btn500.setOnClickListener(v -> openIntent(7));
-        btn700.setOnClickListener(v -> openIntent(10));
-
-        // Animação de pulso — convida o cliente a clicar
-        startPulseAnimation();
+        btn100.setOnClickListener(v -> {
+            highlightSelectedButton(btn100);
+            openIntent(3);
+        });
+        btn300.setOnClickListener(v -> {
+            highlightSelectedButton(btn300);
+            openIntent(5);
+        });
+        btn500.setOnClickListener(v -> {
+            highlightSelectedButton(btn500);
+            openIntent(7);
+        });
+        btn700.setOnClickListener(v -> {
+            highlightSelectedButton(btn700);
+            openIntent(10);
+        });
 
         // Easter egg: 5 cliques no logo → AcessoMaster
         logoChoppOn.setOnClickListener(v -> {
@@ -255,7 +285,7 @@ public class Home extends AppCompatActivity {
         wic.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars());
         wic.setSystemBarsBehavior(
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -349,37 +379,90 @@ public class Home extends AppCompatActivity {
         carregarImagem(imageUrl);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Pulsação aleatória — cada botão pulsa individualmente de forma aleatória
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
-     * Inicia a animação de pulso nos 4 botões.
-     * Cada botão começa com um pequeno atraso para criar efeito cascata.
+     * Inicia o loop de pulsação aleatória.
+     * Ao invés de todos os botões pulsarem continuamente em cascata,
+     * um botão aleatório pulsa de cada vez, com intervalo aleatório entre
+     * PULSE_MIN_INTERVAL_MS e PULSE_MAX_INTERVAL_MS milissegundos.
      */
-    private void startPulseAnimation() {
+    private void startRandomPulse() {
         if (btn100 == null) return;
-        Animation pulse = AnimationUtils.loadAnimation(this, R.anim.pulse_scale);
-        Animation pulse2 = AnimationUtils.loadAnimation(this, R.anim.pulse_scale);
-        Animation pulse3 = AnimationUtils.loadAnimation(this, R.anim.pulse_scale);
-        Animation pulse4 = AnimationUtils.loadAnimation(this, R.anim.pulse_scale);
-        // Atraso escalonado para efeito cascata
-        pulse.setStartOffset(0);
-        pulse2.setStartOffset(180);
-        pulse3.setStartOffset(360);
-        pulse4.setStartOffset(540);
-        btn100.startAnimation(pulse);
-        btn300.startAnimation(pulse2);
-        btn500.startAnimation(pulse3);
-        btn700.startAnimation(pulse4);
-        Log.d(TAG, "Animação de pulso iniciada nos 4 botões");
+        pulseRunning = true;
+        scheduleNextPulse();
+        Log.d(TAG, "Pulsação aleatória iniciada");
     }
 
     /**
-     * Para a animação de pulso (ex: quando BLE desconecta e botões ficam cinza).
+     * Agenda a próxima pulsação de um botão aleatório.
      */
-    private void stopPulseAnimation() {
+    private void scheduleNextPulse() {
+        if (!pulseRunning) return;
+        int delay = PULSE_MIN_INTERVAL_MS
+                + pulseRandom.nextInt(PULSE_MAX_INTERVAL_MS - PULSE_MIN_INTERVAL_MS);
+        pulseHandler.postDelayed(pulseTask, delay);
+    }
+
+    /**
+     * Tarefa que executa a pulsação de um botão aleatório e agenda a próxima.
+     */
+    private final Runnable pulseTask = new Runnable() {
+        @Override
+        public void run() {
+            if (!pulseRunning || btn100 == null) return;
+
+            // Escolhe aleatoriamente qual botão vai pulsar
+            MaterialButton[] buttons = { btn100, btn300, btn500, btn700 };
+            MaterialButton target = buttons[pulseRandom.nextInt(buttons.length)];
+
+            // Carrega a animação e aplica somente no botão sorteado
+            Animation pulse = AnimationUtils.loadAnimation(Home.this, R.anim.pulse_scale_once);
+            pulse.setRepeatCount(1); // pulsa uma vez (vai e volta) e para
+            target.startAnimation(pulse);
+
+            Log.d(TAG, "Pulso aleatório no botão: " + target.getId());
+
+            // Agenda o próximo pulso
+            scheduleNextPulse();
+        }
+    };
+
+    /**
+     * Para o loop de pulsação aleatória e limpa as animações de todos os botões.
+     */
+    private void stopRandomPulse() {
+        pulseRunning = false;
+        pulseHandler.removeCallbacks(pulseTask);
+        if (btn100 != null) {
+            btn100.clearAnimation();
+            btn300.clearAnimation();
+            btn500.clearAnimation();
+            btn700.clearAnimation();
+        }
+        Log.d(TAG, "Pulsação aleatória parada");
+    }
+
+    /**
+     * Destaca visualmente o botão selecionado mudando sua cor,
+     * e restaura a cor padrão nos demais botões.
+     *
+     * @param selected botão que foi clicado pelo cliente
+     */
+    private void highlightSelectedButton(MaterialButton selected) {
         if (btn100 == null) return;
-        btn100.clearAnimation();
-        btn300.clearAnimation();
-        btn500.clearAnimation();
-        btn700.clearAnimation();
+        MaterialButton[] buttons = { btn100, btn300, btn500, btn700 };
+        for (MaterialButton btn : buttons) {
+            if (btn == selected) {
+                btn.setBackgroundTintList(
+                        android.content.res.ColorStateList.valueOf(COLOR_BTN_SELECTED));
+            } else {
+                btn.setBackgroundTintList(
+                        android.content.res.ColorStateList.valueOf(COLOR_BTN_DEFAULT));
+            }
+        }
     }
 
     public void updateValue(Float value) {
@@ -457,16 +540,27 @@ public class Home extends AppCompatActivity {
 
     public void changeButtons(Boolean enabled) {
         if (btn100 == null) return;
-        int color = enabled ? Color.WHITE : Color.LTGRAY;
-        btn100.setEnabled(enabled); btn100.setTextColor(color);
-        btn300.setEnabled(enabled); btn300.setTextColor(color);
-        btn500.setEnabled(enabled); btn500.setTextColor(color);
-        btn700.setEnabled(enabled); btn700.setTextColor(color);
-        // Pulso ativo só quando BLE conectado
+        int textColor = enabled ? Color.WHITE : Color.LTGRAY;
+        btn100.setEnabled(enabled); btn100.setTextColor(textColor);
+        btn300.setEnabled(enabled); btn300.setTextColor(textColor);
+        btn500.setEnabled(enabled); btn500.setTextColor(textColor);
+        btn700.setEnabled(enabled); btn700.setTextColor(textColor);
+
         if (enabled) {
-            startPulseAnimation();
+            // Restaura a cor laranja padrão em todos os botões ao habilitar
+            btn100.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(COLOR_BTN_DEFAULT));
+            btn300.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(COLOR_BTN_DEFAULT));
+            btn500.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(COLOR_BTN_DEFAULT));
+            btn700.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(COLOR_BTN_DEFAULT));
+            // Inicia pulsação aleatória quando BLE conectado
+            startRandomPulse();
         } else {
-            stopPulseAnimation();
+            // Para a pulsação quando BLE desconectado
+            stopRandomPulse();
         }
     }
 
