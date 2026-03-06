@@ -1,5 +1,6 @@
 package com.example.choppontap;
 
+import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
@@ -23,6 +24,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
@@ -170,6 +172,7 @@ public class Home extends AppCompatActivity {
         setupFullscreen();
         android_id = Secure.getString(getContentResolver(), Secure.ANDROID_ID);
         setupUI();
+        setupKioskMode();
 
         // Verifica se os dados vieram por Intent (ex: fluxo de login inicial)
         Bundle extras = getIntent().getExtras();
@@ -279,13 +282,92 @@ public class Home extends AppCompatActivity {
         });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Kiosk Mode — impede saída não autorizada do app
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Configura o Kiosk Mode para impedir que o cliente saia do app.
+     *
+     * ESTRATÉGIA:
+     *   1. startLockTask() — Android Task Pinning: bloqueia botão Home e Recentes
+     *      no nível do sistema operacional. Funciona sem Device Owner como
+     *      "Screen Pinning" (o usuário vê um aviso ao tentar sair).
+     *      Com Device Owner (ADB), o bloqueio é total e silencioso.
+     *   2. OnBackPressedCallback — intercepta o Back e redireciona para
+     *      AcessoMaster em vez de fechar a activity. O cliente não consegue
+     *      sair sem a senha de 6 dígitos ou QR Code do admin.
+     *   3. onWindowFocusChanged — se o app perder foco (notificação, etc.),
+     *      força retorno imediato ao primeiro plano.
+     */
+    private void setupKioskMode() {
+        // 1. Task Pinning — bloqueia Home e Recentes no nível do SO
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null && am.getLockTaskModeState() == ActivityManager.LOCK_TASK_MODE_NONE) {
+                startLockTask();
+                Log.i(TAG, "[KIOSK] Task Pinning ativado com sucesso");
+            } else {
+                Log.i(TAG, "[KIOSK] Task Pinning já estava ativo");
+            }
+        } catch (Exception e) {
+            // Sem Device Owner, startLockTask() pode lançar SecurityException
+            // Nesse caso o bloqueio via OnBackPressedCallback ainda funciona
+            Log.w(TAG, "[KIOSK] startLockTask sem Device Owner: " + e.getMessage());
+        }
+
+        // 2. Intercepta o botão Back — redireciona para AcessoMaster
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                Log.i(TAG, "[KIOSK] Botão Back interceptado → abrindo AcessoMaster");
+                startActivity(new Intent(Home.this, AcessoMaster.class));
+            }
+        });
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            // Recupera fullscreen ao retornar ao foco (ex: após notificação)
+            WindowInsetsControllerCompat wic = new WindowInsetsControllerCompat(
+                    getWindow(), getWindow().getDecorView());
+            wic.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars());
+            wic.setSystemBarsBehavior(
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        } else {
+            // App perdeu foco — força retorno ao primeiro plano após 400ms
+            // (cobre casos onde Task Pinning não está ativo)
+            handler.postDelayed(() -> {
+                try {
+                    ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+                    boolean lockActive = am != null &&
+                            am.getLockTaskModeState() != ActivityManager.LOCK_TASK_MODE_NONE;
+                    if (!lockActive && !isFinishing() && !isDestroyed()) {
+                        Log.i(TAG, "[KIOSK] App perdeu foco sem Task Pinning → forçando retorno");
+                        Intent intent = new Intent(Home.this, Home.class);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                        startActivity(intent);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "[KIOSK] onWindowFocusChanged recovery: " + e.getMessage());
+                }
+            }, 400);
+        }
+    }
+
     private void setupFullscreen() {
         WindowInsetsControllerCompat wic = new WindowInsetsControllerCompat(
                 getWindow(), getWindow().getDecorView());
         wic.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars());
         wic.setSystemBarsBehavior(
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        // CORREÇÃO: o tablet fica fisicamente invertido (cabeça para baixo).
+        // SCREEN_ORIENTATION_REVERSE_PORTRAIT = portrait rotacionado 180°.
+        // O Manifest já declara reversePortrait, mas setRequestedOrientation()
+        // em runtime sobrescrevia com PORTRAIT normal. Corrigido aqui.
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
