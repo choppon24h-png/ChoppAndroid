@@ -333,6 +333,65 @@
             android:textSize="18sp"
             android:textStyle="bold"
             app:cornerRadius="12dp" />
+
+        <!-- Mensagem de erro quando QR Code não carrega (v3.1.0) -->
+        <TextView
+            android:id="@+id/txtQrError"
+            android:layout_width="300dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:padding="8dp"
+            android:text="QR Code indisponível. Use o código abaixo."
+            android:textColor="#CC0000"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+        <!-- Rótulo do código copia e cola (v3.1.0) -->
+        <TextView
+            android:id="@+id/txtPixCodeLabel"
+            android:layout_width="300dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Ou copie o código PIX:"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <!-- Código EMV copia e cola (v3.1.0) -->
+        <TextView
+            android:id="@+id/txtPixCode"
+            android:layout_width="300dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="#F5F5F5"
+            android:ellipsize="end"
+            android:maxLines="3"
+            android:padding="10dp"
+            android:textColor="@color/text_primary"
+            android:textIsSelectable="true"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
+        <!-- Botão copiar código PIX (v3.1.0) -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnCopiarPix"
+            android:layout_width="300dp"
+            android:layout_height="52dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="16dp"
+            android:backgroundTint="#1976D2"
+            android:text="COPIAR CÓDIGO PIX"
+            android:textColor="@color/white"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:visibility="gone"
+            app:cornerRadius="10dp"
+            app:icon="@android:drawable/ic_menu_share"
+            app:iconGravity="textStart"
+            app:iconTint="@color/white" />
+
     </LinearLayout>
 
     <!-- Overlay de Loading Centralizado -->

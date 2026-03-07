@@ -1,5 +1,7 @@
 package com.example.choppontap;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -62,6 +64,14 @@ import okhttp3.ResponseBody;
  *    o polling é interrompido e o usuário é informado, evitando loop infinito
  *    quando o backend está com erro (ex: SQLSTATE[42S22]).
  *  - Logs detalhados para facilitar diagnóstico futuro
+ *
+ * MELHORIAS v3.1.0 (Android) — sincronizado com API chopponERP v3.0.0:
+ *  1. updateQrCode(): exibe o código EMV "copia e cola" (pix_code) abaixo do
+ *     QR Code com botão "COPIAR CÓDIGO PIX" usando ClipboardManager.
+ *  2. updateQrCode(): exibe placeholder e mensagem de erro quando qr_code
+ *     vier vazio ou inválido, evitando tela em branco.
+ *  3. verifyPayment(): aceita checkout_status "PAID", "APPROVED" e "COMPLETED"
+ *     além de "SUCCESSFUL", cobrindo variações da resposta da SumUp para PIX.
  */
 public class FormaPagamento extends AppCompatActivity {
     private String android_id;
@@ -87,6 +97,12 @@ public class FormaPagamento extends AppCompatActivity {
 
     private LinearLayout layoutEscolhaPagamento, layoutQrPix, layoutInstrucaoCartao;
     private TextView txtTimerCartao, txtSetaPiscando, txtInstrucaoCartao;
+
+    // ── Novos elementos para pix_code (v3.1.0) ───────────────────────────────
+    private TextView txtPixCode;
+    private TextView txtPixCodeLabel;
+    private TextView txtQrError;
+    private Button   btnCopiarPix;
 
     private static final String TAG = "PAGAMENTO_DEBUG";
 
@@ -133,6 +149,12 @@ public class FormaPagamento extends AppCompatActivity {
         txtSetaPiscando        = findViewById(R.id.txtSetaPiscando);
         txtInstrucaoCartao     = findViewById(R.id.txtInstrucaoCartao);
 
+        // ── Elementos do pix_code (v3.1.0) ───────────────────────────────────
+        txtPixCode      = findViewById(R.id.txtPixCode);
+        txtPixCodeLabel = findViewById(R.id.txtPixCodeLabel);
+        txtQrError      = findViewById(R.id.txtQrError);
+        btnCopiarPix    = findViewById(R.id.btnCopiarPix);
+
         setupFullscreen();
         setupCpfMask();
 
@@ -149,6 +171,23 @@ public class FormaPagamento extends AppCompatActivity {
             }
         });
 
+        // ── Botão copiar código PIX (v3.1.0) ─────────────────────────────────
+        if (btnCopiarPix != null) {
+            btnCopiarPix.setOnClickListener(v -> {
+                if (txtPixCode != null
+                        && txtPixCode.getText() != null
+                        && !txtPixCode.getText().toString().isEmpty()) {
+                    ClipboardManager clipboard =
+                            (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    ClipData clip = ClipData.newPlainText("PIX",
+                            txtPixCode.getText().toString());
+                    clipboard.setPrimaryClip(clip);
+                    Toast.makeText(this, "Código PIX copiado!", Toast.LENGTH_SHORT).show();
+                    Log.i(TAG, "📋 Código PIX copiado para a área de transferência.");
+                }
+            });
+        }
+
         updateUIState(STATE_CHOOSING);
     }
 
@@ -159,6 +198,15 @@ public class FormaPagamento extends AppCompatActivity {
             constLoader.setVisibility(state == STATE_LOADING ? View.VISIBLE : View.GONE);
             layoutQrPix.setVisibility(state == STATE_PIX ? View.VISIBLE : View.GONE);
             layoutInstrucaoCartao.setVisibility(state == STATE_CARD ? View.VISIBLE : View.GONE);
+
+            // Ocultar elementos do pix_code ao sair da tela PIX
+            if (state != STATE_PIX) {
+                if (txtPixCode      != null) txtPixCode.setVisibility(View.GONE);
+                if (txtPixCodeLabel != null) txtPixCodeLabel.setVisibility(View.GONE);
+                if (btnCopiarPix    != null) btnCopiarPix.setVisibility(View.GONE);
+                if (txtQrError      != null) txtQrError.setVisibility(View.GONE);
+            }
+
             if (state == STATE_CHOOSING) changeButtonsFunction(true);
         });
     }
@@ -335,6 +383,11 @@ public class FormaPagamento extends AppCompatActivity {
      *    continuava o loop indefinidamente sem nunca receber "success".
      *
      *  - onResponse com HTTP 200: zera consecutiveApiErrors e processa o JSON.
+     *
+     * MELHORIA v3.1.0:
+     *  - isSuccess agora aceita checkout_status "PAID", "APPROVED" e "COMPLETED"
+     *    além de "SUCCESSFUL". A SumUp retorna "PAID" para transações PIX em
+     *    algumas configurações de conta.
      */
     public void verifyPayment(String checkout_id) {
         if (checkout_id == null) return;
@@ -403,14 +456,18 @@ public class FormaPagamento extends AppCompatActivity {
                         return;
                     }
 
-                    // ── Verificar status de sucesso ───────────────────────────
+                    // ── Verificar status de sucesso (v3.1.0: aceita PAID/APPROVED/COMPLETED) ──
                     boolean isSuccess = cr.status != null
                             && (cr.status.equalsIgnoreCase("success")
                                 || (cr.checkout_status != null
-                                    && cr.checkout_status.equalsIgnoreCase("SUCCESSFUL")));
+                                    && (cr.checkout_status.equalsIgnoreCase("SUCCESSFUL")
+                                        || cr.checkout_status.equalsIgnoreCase("PAID")
+                                        || cr.checkout_status.equalsIgnoreCase("APPROVED")
+                                        || cr.checkout_status.equalsIgnoreCase("COMPLETED"))));
 
                     if (isSuccess) {
-                        Log.i(TAG, "💰 PAGAMENTO APROVADO! Redirecionando para PagamentoConcluido...");
+                        Log.i(TAG, "💰 PAGAMENTO APROVADO! checkout_status="
+                                + cr.checkout_status + " | Redirecionando...");
                         checkout_status = true;
                         navigateToSuccess();
 
@@ -509,14 +566,69 @@ public class FormaPagamento extends AppCompatActivity {
         });
     }
 
+    /**
+     * Atualiza a tela PIX com o QR Code e o código "copia e cola".
+     *
+     * MELHORIA v3.1.0:
+     *  1. Exibe qr_code (Base64) no ImageView. Se vazio ou inválido, exibe
+     *     uma mensagem de erro orientando o usuário a usar o código copia e cola.
+     *  2. Exibe pix_code (código EMV) abaixo do QR Code com botão "COPIAR CÓDIGO PIX".
+     *     O botão usa ClipboardManager para copiar o código para a área de transferência.
+     */
     public void updateQrCode(Qr qr) {
-        try {
-            byte[] b   = Base64.decode(qr.qr_code, Base64.DEFAULT);
-            Bitmap bmp = BitmapFactory.decodeByteArray(b, 0, b.length);
-            runOnUiThread(() -> imageView.setImageBitmap(bmp));
-        } catch (Exception e) {
-            Log.e(TAG, "Erro ao decodificar QR Code: " + e.getMessage());
+        // ── 1. Exibir imagem do QR Code ───────────────────────────────────────
+        if (qr.qr_code != null && !qr.qr_code.isEmpty()) {
+            try {
+                byte[] b   = Base64.decode(qr.qr_code, Base64.DEFAULT);
+                Bitmap bmp = BitmapFactory.decodeByteArray(b, 0, b.length);
+                if (bmp != null) {
+                    runOnUiThread(() -> {
+                        imageView.setImageBitmap(bmp);
+                        if (txtQrError != null) txtQrError.setVisibility(View.GONE);
+                        Log.d(TAG, "✅ QR Code exibido com sucesso (" + b.length + " bytes)");
+                    });
+                } else {
+                    // decode retornou null (dados corrompidos)
+                    showQrError("QR Code inválido. Use o código copia e cola abaixo.");
+                    Log.w(TAG, "⚠️ BitmapFactory.decodeByteArray retornou null (dados corrompidos)");
+                }
+            } catch (Exception e) {
+                showQrError("QR Code indisponível. Use o código copia e cola abaixo.");
+                Log.e(TAG, "❌ Erro ao decodificar QR Code Base64: " + e.getMessage());
+            }
+        } else {
+            // qr_code vazio ou nulo — servidor não conseguiu gerar a imagem
+            showQrError("QR Code indisponível. Use o código copia e cola abaixo.");
+            Log.w(TAG, "⚠️ qr_code vazio ou nulo na resposta da API");
         }
+
+        // ── 2. Exibir código EMV "copia e cola" ───────────────────────────────
+        if (qr.pix_code != null && !qr.pix_code.isEmpty()) {
+            runOnUiThread(() -> {
+                if (txtPixCodeLabel != null) txtPixCodeLabel.setVisibility(View.VISIBLE);
+                if (txtPixCode != null) {
+                    txtPixCode.setText(qr.pix_code);
+                    txtPixCode.setVisibility(View.VISIBLE);
+                }
+                if (btnCopiarPix != null) btnCopiarPix.setVisibility(View.VISIBLE);
+                Log.d(TAG, "✅ Código PIX EMV exibido (" + qr.pix_code.length() + " chars)");
+            });
+        } else {
+            Log.w(TAG, "⚠️ pix_code vazio ou nulo — botão 'Copiar' não será exibido");
+        }
+    }
+
+    /**
+     * Exibe mensagem de erro no lugar do QR Code quando a imagem não está disponível.
+     */
+    private void showQrError(String mensagem) {
+        runOnUiThread(() -> {
+            imageView.setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
+            if (txtQrError != null) {
+                txtQrError.setText(mensagem);
+                txtQrError.setVisibility(View.VISIBLE);
+            }
+        });
     }
 
     private void stopRunnable() {
