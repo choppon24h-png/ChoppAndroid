@@ -346,6 +346,39 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/btnToggleTap" />
 
+        <!-- Botão Verificar Atualização do App (v3.2.0) -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnAtualizarApp"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="#1976D2"
+            android:text="Verificar Atualização"
+            android:textColor="@color/white"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/stat_sys_download"
+            app:iconGravity="textStart"
+            app:iconTint="@color/white"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/progressToggle"
+            app:layout_constraintWidth_max="500dp" />
+
+        <!-- Progress bar do download de atualização (v3.2.0) -->
+        <ProgressBar
+            android:id="@+id/progressUpdate"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/btnAtualizarApp" />
+
         <!-- Botão Sair -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnSairTools"
@@ -359,7 +392,7 @@
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/progressToggle" />
+            app:layout_constraintTop_toBottomOf="@+id/progressUpdate" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 </ScrollView>

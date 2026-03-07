@@ -1,14 +1,23 @@
 package com.example.choppontap;
 
 import android.app.AlertDialog;
+import android.app.DownloadManager;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Color;
+import android.net.Uri;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.IBinder;
 import android.provider.Settings;
 import android.util.Log;
@@ -19,15 +28,19 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
 
 import com.google.android.material.button.MaterialButton;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 
@@ -47,10 +60,24 @@ import okhttp3.ResponseBody;
  *   4. Navega para Home com FLAG_ACTIVITY_CLEAR_TOP + finishAffinity()
  *      → Home.onCreate() chama sendRequestCheckSecurity() + bindBluetoothService()
  *        que recarrega bebida, imagem, preço e conecta ao ESP32
+ *
+ * Sistema de ATUALIZAÇÃO DE APK (v3.2.0):
+ *   - checkAppUpdate(Context)  → consulta version.json no servidor
+ *   - downloadNewVersion(...)  → baixa o APK via DownloadManager
+ *   - installApk(File)         → instala via FileProvider (Android 7+)
+ *   Não interfere em nenhuma lógica existente.
+ *   Acionado apenas pelo botão btnAtualizarApp ou chamada manual.
  */
 public class ServiceTools extends AppCompatActivity {
 
     private static final String TAG = "SERVICE_TOOLS";
+
+    // ── URL do endpoint de versão (alterar para o servidor real) ─────────────
+    private static final String VERSION_URL =
+            "https://ochoppoficial.com.br/app/version.json";
+
+    // ── Nome do arquivo APK salvo no Downloads ────────────────────────────────
+    private static final String APK_FILE_NAME = "choppontap-update.apk";
 
     // ── Card de sistema ───────────────────────────────────────────────────────
     private TextView txtInfoImei, txtInfoBluetooth, txtInfoWifi;
@@ -65,12 +92,18 @@ public class ServiceTools extends AppCompatActivity {
     // ── Botões ────────────────────────────────────────────────────────────────
     private MaterialButton btnCalibrarPulsos, btnTempoAbertura, btnSairTools;
     private MaterialButton btnAtualizarLeitora, btnToggleTap;
+    private MaterialButton btnAtualizarApp;          // NOVO — botão de atualização
     private ProgressBar progressToggle;
+    private ProgressBar progressUpdate;              // NOVO — progresso do download
 
     // ── Estado da TAP ─────────────────────────────────────────────────────────
     private boolean tapAtiva = true;
     private String android_id;
     private boolean fromOffline = false;
+
+    // ── Download em andamento ─────────────────────────────────────────────────
+    private long mDownloadId = -1;
+    private BroadcastReceiver mDownloadReceiver;
 
     // ── Bluetooth Service ─────────────────────────────────────────────────────
     private BluetoothService mBluetoothService;
@@ -82,7 +115,6 @@ public class ServiceTools extends AppCompatActivity {
             mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
             mIsServiceBound = true;
             Log.i(TAG, "BluetoothService vinculado ao ServiceTools");
-            // Atualiza o card de Bluetooth com o estado real
             runOnUiThread(() -> {
                 boolean conectado = mBluetoothService.connected();
                 txtInfoBluetooth.setText("Bluetooth: " + (conectado ? "Conectado ao ESP32" : "Desconectado"));
@@ -128,6 +160,10 @@ public class ServiceTools extends AppCompatActivity {
         btnToggleTap          = findViewById(R.id.btnToggleTap);
         progressToggle        = findViewById(R.id.progressToggle);
 
+        // NOVO — botão e progresso de atualização do app
+        btnAtualizarApp  = findViewById(R.id.btnAtualizarApp);
+        progressUpdate   = findViewById(R.id.progressUpdate);
+
         android_id = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
 
         // ── Inicialização ─────────────────────────────────────────────────────
@@ -150,7 +186,339 @@ public class ServiceTools extends AppCompatActivity {
         btnAtualizarLeitora.setOnClickListener(v -> loadReaderStatus());
 
         btnToggleTap.setOnClickListener(v -> confirmarToggleTap());
+
+        // NOVO — listener do botão de atualização do app
+        if (btnAtualizarApp != null) {
+            btnAtualizarApp.setOnClickListener(v -> checkAppUpdate(this));
+        }
     }
+
+    // =========================================================================
+    // SISTEMA DE ATUALIZAÇÃO DE APK — v3.2.0
+    // Todos os métodos abaixo são novos e não alteram nenhuma lógica existente.
+    // =========================================================================
+
+    /**
+     * Ponto de entrada público para verificação de atualização.
+     * Pode ser chamado por qualquer Activity via:
+     *   ServiceTools.checkAppUpdate(context)  — chamada estática
+     * ou internamente pelo botão btnAtualizarApp.
+     *
+     * @param context Context da Activity chamadora
+     */
+    public static void checkAppUpdate(Context context) {
+        Log.d(TAG, "checkAppUpdate() iniciado");
+
+        OkHttpClient client = new OkHttpClient();
+        Request request = new Request.Builder()
+                .url(VERSION_URL)
+                .addHeader("Cache-Control", "no-cache")
+                .build();
+
+        client.newCall(request).enqueue(new okhttp3.Callback() {
+            @Override
+            public void onFailure(okhttp3.Call call, IOException e) {
+                Log.e(TAG, "checkAppUpdate - falha de rede: " + e.getMessage());
+                if (context instanceof AppCompatActivity) {
+                    ((AppCompatActivity) context).runOnUiThread(() ->
+                            Toast.makeText(context,
+                                    "Não foi possível verificar atualizações.\nVerifique a conexão.",
+                                    Toast.LENGTH_LONG).show());
+                }
+            }
+
+            @Override
+            public void onResponse(okhttp3.Call call, okhttp3.Response response) throws IOException {
+                try (okhttp3.ResponseBody rb = response.body()) {
+                    if (!response.isSuccessful() || rb == null) {
+                        Log.e(TAG, "checkAppUpdate - resposta inválida HTTP " + response.code());
+                        return;
+                    }
+
+                    String json = rb.string();
+                    Log.d(TAG, "checkAppUpdate - version.json: " + json);
+
+                    // Parsear o JSON de versão
+                    VersionInfo info = parseVersionJson(json);
+                    if (info == null) {
+                        Log.e(TAG, "checkAppUpdate - falha ao parsear version.json");
+                        return;
+                    }
+
+                    // Obter versionCode atual do app instalado
+                    int currentVersionCode = getCurrentVersionCode(context);
+                    Log.d(TAG, "checkAppUpdate - versão atual: " + currentVersionCode
+                            + " | versão servidor: " + info.versionCode);
+
+                    if (context instanceof AppCompatActivity) {
+                        AppCompatActivity activity = (AppCompatActivity) context;
+                        activity.runOnUiThread(() ->
+                                handleUpdateResult(activity, info, currentVersionCode));
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Avalia o resultado da verificação e exibe o diálogo adequado.
+     */
+    private static void handleUpdateResult(AppCompatActivity activity,
+                                           VersionInfo info,
+                                           int currentVersionCode) {
+        if (info.versionCode > currentVersionCode) {
+            // Nova versão disponível
+            String titulo   = "Nova atualização disponível";
+            String mensagem = "Versão " + info.versionName + " disponível.\n\n"
+                    + "Versão atual: " + getCurrentVersionName(activity) + "\n\n"
+                    + (info.changelog != null && !info.changelog.isEmpty()
+                    ? "O que há de novo:\n" + info.changelog : "");
+
+            AlertDialog.Builder builder = new AlertDialog.Builder(activity)
+                    .setTitle(titulo)
+                    .setMessage(mensagem)
+                    .setPositiveButton("Atualizar agora", (dialog, which) -> {
+                        if (activity instanceof ServiceTools) {
+                            ((ServiceTools) activity).downloadNewVersion(info.apkUrl);
+                        }
+                    })
+                    .setNegativeButton("Agora não", null);
+
+            if (info.force) {
+                // Atualização obrigatória: remove o botão "Agora não"
+                builder.setCancelable(false)
+                        .setNegativeButton(null, null);
+            }
+
+            builder.show();
+
+        } else {
+            // App já está atualizado
+            Toast.makeText(activity,
+                    "O aplicativo já está na versão mais recente (" + getCurrentVersionName(activity) + ").",
+                    Toast.LENGTH_LONG).show();
+            Log.d(TAG, "checkAppUpdate - app já está atualizado");
+        }
+    }
+
+    /**
+     * Baixa o APK usando DownloadManager e registra um BroadcastReceiver
+     * para iniciar a instalação quando o download concluir.
+     *
+     * @param apkUrl URL completa do APK no servidor
+     */
+    private void downloadNewVersion(String apkUrl) {
+        Log.d(TAG, "downloadNewVersion() url=" + apkUrl);
+
+        // Exibe progresso
+        if (progressUpdate != null) {
+            progressUpdate.setVisibility(View.VISIBLE);
+        }
+        if (btnAtualizarApp != null) {
+            btnAtualizarApp.setEnabled(false);
+            btnAtualizarApp.setText("Baixando...");
+        }
+
+        Toast.makeText(this, "Iniciando download da atualização...", Toast.LENGTH_SHORT).show();
+
+        // Remove APK anterior se existir
+        File apkFile = getApkFile();
+        if (apkFile.exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            apkFile.delete();
+        }
+
+        // Configura o DownloadManager
+        DownloadManager.Request dmRequest = new DownloadManager.Request(Uri.parse(apkUrl))
+                .setTitle("ChoppON — Atualização")
+                .setDescription("Baixando versão mais recente do app...")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, APK_FILE_NAME)
+                .setMimeType("application/vnd.android.package-archive")
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(false);
+
+        DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+        if (dm == null) {
+            Log.e(TAG, "downloadNewVersion - DownloadManager indisponível");
+            resetUpdateButton();
+            return;
+        }
+
+        mDownloadId = dm.enqueue(dmRequest);
+        Log.d(TAG, "downloadNewVersion - download enfileirado id=" + mDownloadId);
+
+        // Registra receiver para capturar conclusão do download
+        mDownloadReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context ctx, Intent intent) {
+                long completedId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                if (completedId != mDownloadId) return;
+
+                Log.d(TAG, "downloadNewVersion - download concluído id=" + completedId);
+                unregisterReceiver(mDownloadReceiver);
+                mDownloadReceiver = null;
+
+                // Verifica se o download foi bem-sucedido
+                DownloadManager.Query query = new DownloadManager.Query()
+                        .setFilterById(mDownloadId);
+                Cursor cursor = dm.query(query);
+                if (cursor != null && cursor.moveToFirst()) {
+                    int statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS);
+                    int status = (statusIdx >= 0) ? cursor.getInt(statusIdx) : -1;
+                    cursor.close();
+
+                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                        runOnUiThread(() -> {
+                            resetUpdateButton();
+                            installApk(getApkFile());
+                        });
+                    } else {
+                        Log.e(TAG, "downloadNewVersion - download falhou status=" + status);
+                        runOnUiThread(() -> {
+                            resetUpdateButton();
+                            Toast.makeText(ServiceTools.this,
+                                    "Falha no download. Tente novamente.",
+                                    Toast.LENGTH_LONG).show();
+                        });
+                    }
+                }
+            }
+        };
+
+        registerReceiver(mDownloadReceiver,
+                new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+    }
+
+    /**
+     * Inicia a instalação do APK baixado usando FileProvider (Android 7+).
+     *
+     * @param apkFile Arquivo APK a ser instalado
+     */
+    private void installApk(File apkFile) {
+        Log.d(TAG, "installApk() path=" + apkFile.getAbsolutePath());
+
+        if (!apkFile.exists()) {
+            Log.e(TAG, "installApk - arquivo não encontrado: " + apkFile.getAbsolutePath());
+            Toast.makeText(this, "Arquivo de atualização não encontrado.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        // Verifica permissão de instalação de fontes desconhecidas (Android 8+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (!getPackageManager().canRequestPackageInstalls()) {
+                Log.w(TAG, "installApk - permissão de instalar APK não concedida, abrindo configurações");
+                Toast.makeText(this,
+                        "Permita a instalação de apps de fontes desconhecidas nas configurações.",
+                        Toast.LENGTH_LONG).show();
+                Intent settingsIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                        .setData(Uri.parse("package:" + getPackageName()));
+                startActivity(settingsIntent);
+                return;
+            }
+        }
+
+        Uri apkUri;
+        try {
+            apkUri = FileProvider.getUriForFile(
+                    this,
+                    getPackageName() + ".fileprovider",
+                    apkFile);
+        } catch (IllegalArgumentException e) {
+            Log.e(TAG, "installApk - FileProvider falhou: " + e.getMessage());
+            Toast.makeText(this, "Erro ao preparar instalação do APK.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        Intent installIntent = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(apkUri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+        Log.d(TAG, "installApk - iniciando instalação via Intent");
+        startActivity(installIntent);
+    }
+
+    // ── Helpers privados ──────────────────────────────────────────────────────
+
+    /** Retorna o File do APK no diretório Downloads público. */
+    private static File getApkFile() {
+        return new File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                APK_FILE_NAME);
+    }
+
+    /** Obtém o versionCode atual do app instalado. */
+    private static int getCurrentVersionCode(Context context) {
+        try {
+            PackageInfo pi = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                return (int) pi.getLongVersionCode();
+            } else {
+                //noinspection deprecation
+                return pi.versionCode;
+            }
+        } catch (PackageManager.NameNotFoundException e) {
+            Log.e(TAG, "getCurrentVersionCode - " + e.getMessage());
+            return 0;
+        }
+    }
+
+    /** Obtém o versionName atual do app instalado. */
+    private static String getCurrentVersionName(Context context) {
+        try {
+            return context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).versionName;
+        } catch (PackageManager.NameNotFoundException e) {
+            return "desconhecida";
+        }
+    }
+
+    /** Parseia o JSON de versão retornado pelo servidor. */
+    private static VersionInfo parseVersionJson(String json) {
+        try {
+            // Limpa possíveis caracteres antes do JSON
+            int idx = json.indexOf('{');
+            if (idx > 0) json = json.substring(idx);
+
+            com.google.gson.JsonObject obj =
+                    com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+
+            VersionInfo info = new VersionInfo();
+            info.versionCode = obj.has("versionCode") ? obj.get("versionCode").getAsInt()    : 0;
+            info.versionName = obj.has("versionName") ? obj.get("versionName").getAsString() : "";
+            info.apkUrl      = obj.has("apkUrl")      ? obj.get("apkUrl").getAsString()      : "";
+            info.force       = obj.has("force")       && obj.get("force").getAsBoolean();
+            info.changelog   = obj.has("changelog")   ? obj.get("changelog").getAsString()   : "";
+            return info;
+        } catch (Exception e) {
+            Log.e(TAG, "parseVersionJson - erro: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** Restaura o estado do botão de atualização. */
+    private void resetUpdateButton() {
+        if (progressUpdate != null) progressUpdate.setVisibility(View.GONE);
+        if (btnAtualizarApp != null) {
+            btnAtualizarApp.setEnabled(true);
+            btnAtualizarApp.setText("Verificar Atualização");
+        }
+    }
+
+    /** Modelo de dados do version.json. */
+    private static class VersionInfo {
+        int     versionCode = 0;
+        String  versionName = "";
+        String  apkUrl      = "";
+        boolean force       = false;
+        String  changelog   = "";
+    }
+
+    // =========================================================================
+    // LÓGICA EXISTENTE — não alterada
+    // =========================================================================
 
     // ─────────────────────────────────────────────────────────────────────────
     // Sincroniza o estado atual da TAP via verify_tap.php
@@ -178,7 +546,6 @@ public class ServiceTools extends AppCompatActivity {
                         com.google.gson.JsonObject obj =
                                 com.google.gson.JsonParser.parseString(jsonLimpo).getAsJsonObject();
 
-                        // Suporta campo novo (tap_status) e legado (status)
                         if (obj.has("tap_status")) {
                             ativa = (obj.get("tap_status").getAsInt() == 1);
                         } else if (obj.has("status")) {
@@ -263,7 +630,6 @@ public class ServiceTools extends AppCompatActivity {
                     boolean sucesso   = false;
                     String novoStatus = "";
 
-                    // Limpa possíveis caracteres antes do JSON
                     String jsonLimpo = json;
                     int braceIdx = json.indexOf('{');
                     if (braceIdx > 0) jsonLimpo = json.substring(braceIdx);
@@ -278,7 +644,7 @@ public class ServiceTools extends AppCompatActivity {
                         Log.e(TAG, "Erro ao parsear resposta toggle_tap: " + e.getMessage());
                     }
 
-                    final boolean ok         = sucesso;
+                    final boolean ok          = sucesso;
                     final String  statusFinal = novoStatus;
 
                     runOnUiThread(() -> {
@@ -290,10 +656,7 @@ public class ServiceTools extends AppCompatActivity {
                             atualizarBotaoToggle();
 
                             if (!tapAtiva) {
-                                // ── DESATIVAÇÃO ──────────────────────────────────────────
-                                // 1. Desconecta o Bluetooth do ESP32
                                 desconectarBluetooth();
-                                // 2. Navega para OfflineTap limpando toda a pilha de activities
                                 Log.i(TAG, "TAP desativada → BT desconectado → navegando para OfflineTap");
                                 Intent intent = new Intent(ServiceTools.this, OfflineTap.class);
                                 intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -301,14 +664,8 @@ public class ServiceTools extends AppCompatActivity {
                                         | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                                 startActivity(intent);
                                 finishAffinity();
-
                             } else {
-                                // ── ATIVAÇÃO ─────────────────────────────────────────────
-                                // 1. Inicia reconexão Bluetooth ao ESP32
                                 reconectarBluetooth();
-                                // 2. Navega para Home limpando toda a pilha de activities
-                                //    Home.onCreate() → sendRequestCheckSecurity() recarrega
-                                //    bebida, imagem, preço e bindBluetoothService() reconecta
                                 Log.i(TAG, "TAP ativada → BT reconectando → navegando para Home");
                                 Intent intent = new Intent(ServiceTools.this, Home.class);
                                 intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -318,7 +675,8 @@ public class ServiceTools extends AppCompatActivity {
                                 finishAffinity();
                             }
                         } else {
-                            Toast.makeText(ServiceTools.this, "Falha ao alterar status da TAP", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(ServiceTools.this,
+                                    "Falha ao alterar status da TAP", Toast.LENGTH_SHORT).show();
                         }
                     });
                 }
@@ -344,12 +702,9 @@ public class ServiceTools extends AppCompatActivity {
     private void reconectarBluetooth() {
         if (mIsServiceBound && mBluetoothService != null) {
             Log.i(TAG, "Iniciando reconexão Bluetooth (TAP ativada)");
-            // Reabilita auto-reconnect e inicia scan/conexão
             mBluetoothService.scanLeDevice(true);
         } else {
             Log.w(TAG, "BluetoothService não vinculado — Home fará a reconexão no onCreate()");
-            // Home.bindBluetoothService() → onServiceConnected() → scanLeDevice(true)
-            // cobre este caso automaticamente
         }
     }
 
@@ -366,7 +721,6 @@ public class ServiceTools extends AppCompatActivity {
         } else {
             txtInfoWifi.setText("Wi-Fi: Desconectado");
         }
-        // Estado do BT será atualizado pelo onServiceConnected
         txtInfoBluetooth.setText("Bluetooth: Verificando...");
     }
 
@@ -444,7 +798,7 @@ public class ServiceTools extends AppCompatActivity {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Ciclo de vida — desvincula o serviço ao destruir a Activity
+    // Ciclo de vida — desvincula o serviço e o receiver ao destruir a Activity
     // ─────────────────────────────────────────────────────────────────────────
     @Override
     protected void onDestroy() {
@@ -452,6 +806,15 @@ public class ServiceTools extends AppCompatActivity {
         if (mIsServiceBound) {
             unbindService(mServiceConnection);
             mIsServiceBound = false;
+        }
+        // Desregistra o receiver de download se ainda estiver ativo
+        if (mDownloadReceiver != null) {
+            try {
+                unregisterReceiver(mDownloadReceiver);
+            } catch (IllegalArgumentException ignored) {
+                // Receiver já foi desregistrado
+            }
+            mDownloadReceiver = null;
         }
     }
 }
