@@ -3,6 +3,8 @@ package com.example.choppontap;
 import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -79,8 +81,12 @@ public class ServiceTools extends AppCompatActivity {
     // ── Nome do arquivo APK salvo no Downloads ────────────────────────────────
     private static final String APK_FILE_NAME = "choppontap-update.apk";
 
-    // ── Card de sistema ───────────────────────────────────────────────────────
+    // ── Card de sistema ────────────────────────────────────────────────────
     private TextView txtInfoImei, txtInfoBluetooth, txtInfoWifi;
+
+    // ── Card BLE (ESP32) ────────────────────────────────────────────────────
+    private TextView txtBleMac, txtBleStatus, txtBleNome, txtBleAndroidId;
+    private MaterialButton btnCopiarMac, btnCopiarAndroidId;
 
     // ── Card de leitora ───────────────────────────────────────────────────────
     private TextView txtLeitoraNome, txtLeitoraStatus, txtApiStatus, txtLeitoraMensagem;
@@ -118,6 +124,8 @@ public class ServiceTools extends AppCompatActivity {
             runOnUiThread(() -> {
                 boolean conectado = mBluetoothService.connected();
                 txtInfoBluetooth.setText("Bluetooth: " + (conectado ? "Conectado ao ESP32" : "Desconectado"));
+                // Atualiza o card BLE com o status de conexão real
+                atualizarStatusBle(conectado);
             });
         }
 
@@ -164,10 +172,19 @@ public class ServiceTools extends AppCompatActivity {
         btnAtualizarApp  = findViewById(R.id.btnAtualizarApp);
         progressUpdate   = findViewById(R.id.progressUpdate);
 
+        // ── Card BLE (ESP32) ────────────────────────────────────────────────────
+        txtBleMac       = findViewById(R.id.txtBleMac);
+        txtBleStatus    = findViewById(R.id.txtBleStatus);
+        txtBleNome      = findViewById(R.id.txtBleNome);
+        txtBleAndroidId = findViewById(R.id.txtBleAndroidId);
+        btnCopiarMac    = findViewById(R.id.btnCopiarMac);
+        btnCopiarAndroidId = findViewById(R.id.btnCopiarAndroidId);
+
         android_id = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
 
-        // ── Inicialização ─────────────────────────────────────────────────────
+        // ── Inicialização ────────────────────────────────────────────────────
         loadSystemInfo();
+        loadBleInfo();       // ← Card BLE: MAC, status e nome do ESP32
         loadReaderStatus();
         sincronizarEstadoTap();
 
@@ -708,9 +725,100 @@ public class ServiceTools extends AppCompatActivity {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Card BLE (ESP32) — MAC e informações do dispositivo
+    // ─────────────────────────────────────────────────────────────────────────────
+    /**
+     * Carrega as informações do dispositivo BLE (ESP32) salvas no SharedPreferences.
+     * O MAC é gravado em "tap_config" → "esp32_mac" pelo BluetoothService ao conectar.
+     * O nome do dispositivo é o prefixo "CHOPP_" seguido do identificador do ESP32.
+     * Exibe o Android ID do tablet para facilitar o cadastro na API web.
+     */
+    private void loadBleInfo() {
+        String mac = getSharedPreferences("tap_config", Context.MODE_PRIVATE)
+                .getString("esp32_mac", null);
+
+        if (txtBleMac == null) return; // card não presente no layout
+
+        if (mac != null && !mac.isEmpty()) {
+            txtBleMac.setText(mac);
+            txtBleNome.setText("Nome esperado: CHOPP_" + mac.replace(":", "").substring(6));
+        } else {
+            txtBleMac.setText("Não encontrado");
+            txtBleNome.setText("Aguardando conexão BLE...");
+        }
+
+        // Android ID do tablet (necessário para cadastrar o TAP na API web)
+        if (txtBleAndroidId != null) {
+            txtBleAndroidId.setText(android_id);
+        }
+
+        // Status inicial (será atualizado quando o BluetoothService conectar)
+        if (txtBleStatus != null) {
+            txtBleStatus.setText("● AGUARDANDO...");
+            txtBleStatus.setTextColor(android.graphics.Color.parseColor("#888888"));
+        }
+
+        // Botão copiar MAC
+        if (btnCopiarMac != null) {
+            btnCopiarMac.setOnClickListener(v -> {
+                String macAtual = txtBleMac.getText().toString();
+                if (!macAtual.isEmpty() && !macAtual.equals("Não encontrado")) {
+                    copiarParaClipboard("MAC ESP32", macAtual);
+                    Toast.makeText(this, "MAC copiado: " + macAtual, Toast.LENGTH_SHORT).show();
+                    Log.i(TAG, "MAC BLE copiado: " + macAtual);
+                } else {
+                    Toast.makeText(this, "MAC não disponível. Conecte o BLE primeiro.", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
+        // Botão copiar Android ID
+        if (btnCopiarAndroidId != null) {
+            btnCopiarAndroidId.setOnClickListener(v -> {
+                copiarParaClipboard("Android ID", android_id);
+                Toast.makeText(this, "Android ID copiado!", Toast.LENGTH_SHORT).show();
+                Log.i(TAG, "Android ID copiado: " + android_id);
+            });
+        }
+    }
+
+    /**
+     * Atualiza o indicador de status BLE no card após o BluetoothService conectar.
+     * Chamado pelo onServiceConnected quando o status real do GATT é conhecido.
+     */
+    private void atualizarStatusBle(boolean conectado) {
+        if (txtBleStatus == null) return;
+        if (conectado) {
+            txtBleStatus.setText("● CONECTADO");
+            txtBleStatus.setTextColor(android.graphics.Color.parseColor("#4CAF50"));
+            // Atualiza o MAC se ainda não estava salvo (conexão feita antes de abrir ServiceTools)
+            if (mBluetoothService != null && mBluetoothService.connected()) {
+                String mac = getSharedPreferences("tap_config", Context.MODE_PRIVATE)
+                        .getString("esp32_mac", null);
+                if (mac != null && txtBleMac != null) {
+                    txtBleMac.setText(mac);
+                    if (txtBleNome != null)
+                        txtBleNome.setText("Nome esperado: CHOPP_" + mac.replace(":", "").substring(6));
+                }
+            }
+        } else {
+            txtBleStatus.setText("● DESCONECTADO");
+            txtBleStatus.setTextColor(android.graphics.Color.parseColor("#F44336"));
+        }
+    }
+
+    /** Copia texto para a área de transferência. */
+    private void copiarParaClipboard(String label, String texto) {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(ClipData.newPlainText(label, texto));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
     // Informações do sistema
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────────
     private void loadSystemInfo() {
         txtInfoImei.setText("IMEI/ID: " + android_id);
         WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
