@@ -269,7 +269,7 @@ public class Home extends AppCompatActivity {
             openIntent(10);
         });
 
-        // Easter egg: 5 cliques no logo → AcessoMaster
+        // Easter egg: 5 cliques no logo → AcessoMaster (senha de admin)
         logoChoppOn.setOnClickListener(v -> {
             secretClickCount++;
             if (secretClickCount >= 5) {
@@ -316,7 +316,7 @@ public class Home extends AppCompatActivity {
             Log.w(TAG, "[KIOSK] startLockTask sem Device Owner: " + e.getMessage());
         }
 
-        // 2. Intercepta o botão Back — redireciona para AcessoMaster
+        // 2. Intercepta o botão Back — redireciona para AcessoMaster (senha de admin)
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {

@@ -14,8 +14,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.provider.Settings;
-import android.provider.Settings.Secure;
-import android.text.InputType;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
@@ -24,8 +22,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
-import androidx.annotation.NonNull;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.view.WindowInsetsCompat;
@@ -34,21 +30,10 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.google.android.material.snackbar.Snackbar;
 
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-
-import okhttp3.Call;
-import okhttp3.Callback;
-import okhttp3.OkHttpClient;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
 
 
 public class CalibrarPulsos extends AppCompatActivity {
 
-    private final OkHttpClient client = new OkHttpClient();
-    String android_id;
     private Handler handler = new Handler();
     private ConstraintLayout main;
     private BluetoothService mBluetoothService;
@@ -168,8 +153,8 @@ public class CalibrarPulsos extends AppCompatActivity {
         setContentView(R.layout.calibrar_pulsos);
         
         setupFullscreen();
-        exibirDialogoSenha();
 
+        // Acesso liberado diretamente (senha de admin já validada no AcessoMaster/ServiceTools)
         qtdAtual = findViewById(R.id.txtTimeoutAtual);
         txtVolumeLiberado = findViewById(R.id.txtVolumeLiberado);
         main = findViewById(R.id.mainCalibrar);
@@ -239,46 +224,5 @@ public class CalibrarPulsos extends AppCompatActivity {
         });
     }
 
-    private void exibirDialogoSenha() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Autenticação");
-        builder.setMessage("Senha de administrador:");
-        final EditText input = new EditText(this);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        builder.setView(input);
-        builder.setPositiveButton("OK", (d, w) -> {
-            String pass = input.getText().toString();
-            if (!pass.isEmpty()) sendRequest(pass);
-        });
-        builder.setNegativeButton("Sair", (d, w) -> finish());
-        builder.setCancelable(false);
-        builder.show();
-    }
-
-    private void sendRequest(String senha) {
-        Map<String, String> body = new HashMap<>();
-        String aid = Secure.getString(getContentResolver(), Secure.ANDROID_ID);
-        body.put("android_id", aid);
-        body.put("senha", senha);
-        
-        new ApiHelper().sendPost(body, "verificar_senha_admin.php", new Callback() {
-            @Override public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                runOnUiThread(() -> Toast.makeText(CalibrarPulsos.this, "Erro de conexão", Toast.LENGTH_SHORT).show());
-            }
-            @Override public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                try (ResponseBody rb = response.body()) {
-                    if (response.isSuccessful() && rb != null) {
-                        String res = rb.string();
-                        runOnUiThread(() -> {
-                            if (res.contains("success")) main.setVisibility(View.VISIBLE);
-                            else {
-                                Toast.makeText(CalibrarPulsos.this, "Senha Incorreta!", Toast.LENGTH_SHORT).show();
-                                exibirDialogoSenha();
-                            }
-                        });
-                    }
-                }
-            }
-        });
-    }
 }
+

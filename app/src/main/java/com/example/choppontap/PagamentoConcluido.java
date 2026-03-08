@@ -300,11 +300,13 @@ public class PagamentoConcluido extends AppCompatActivity {
             atualizarStatus("❌ Erro no dispositivo. Tente novamente.");
             runOnUiThread(() -> mostrarSnackbar("Erro no dispositivo de chopp. Contate o suporte."));
             return;
-        }
-
-        // ── ERROR:NOT_AUTHENTICATED ───────────────────────────────────────────
-        if (msg.startsWith("ERROR:NOT_AUTHENTICATED")) {
-            cancelarWatchdog();
+             // ── ERROR:NOT_AUTHENTICATED ─────────────────────────────────────────────────────
+        // Usa contains("ERROR:NOT_AUTHEN") para cobrir tanto a mensagem completa
+        // "ERROR:NOT_AUTHENTICATED" (23 bytes) quanto a versão truncada
+        // "ERROR:NOT_AUTHENTICA" (20 bytes) causada pelo MTU padrão BLE de 23 bytes.
+        // Bug confirmado no log 2026-03-07 19:27:24: ESP32 enviou [ERROR:NOT_AUTHENTICA].
+        // A correção definitiva é a negociação de MTU=512 em BluetoothService.java.
+        if (msg.contains("ERROR:NOT_AUTHEN")) {         cancelarWatchdog();
             Log.e(TAG, "ESP32: NOT_AUTHENTICATED — forçando re-scan BLE");
             atualizarStatus("❌ Dispositivo não autenticado. Reconectando...");
             mAuthOk = false;

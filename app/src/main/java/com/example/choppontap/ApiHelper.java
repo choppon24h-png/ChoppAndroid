@@ -213,7 +213,18 @@ public class ApiHelper {
                 }
             }
 
-            String fullUrl = api + (endpoint.endsWith(".php") ? endpoint : endpoint + ".php");
+            // Separa o endpoint do query string antes de verificar a extensão .php.
+            // Sem isso, "liberacao.php?action=iniciada" resulta em
+            // "liberacao.php?action=iniciada.php" (bug confirmado no log 2026-03-07 19:33:35).
+            String base  = endpoint;
+            String query = "";
+            int qIdx = endpoint.indexOf('?');
+            if (qIdx >= 0) {
+                base  = endpoint.substring(0, qIdx);
+                query = endpoint.substring(qIdx); // inclui o '?'
+            }
+            if (!base.endsWith(".php")) base = base + ".php";
+            String fullUrl = api + base + query;
 
             Request request = new Request.Builder()
                     .url(fullUrl)

@@ -92,12 +92,25 @@ public class BluetoothService extends Service {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 broadcastConnectionStatus("connected");
                 if (ActivityCompat.checkSelfPermission(BluetoothService.this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                    gatt.discoverServices();
+                    // Negocia MTU máximo (512 bytes) antes de descobrir serviços.
+                    // Sem isso, o BLE usa MTU padrão de 23 bytes (payload útil = 20 bytes),
+                    // truncando mensagens como "ERROR:NOT_AUTHENTICATED" (23 bytes) para
+                    // "ERROR:NOT_AUTHENTICA" (20 bytes) — bug confirmado no log 2026-03-07.
+                    gatt.requestMtu(512);
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 closeGatt();
                 broadcastConnectionStatus("disconnected");
                 if (mAutoReconnect) retryConnection();
+            }
+        }
+
+        @Override
+        public void onMtuChanged(BluetoothGatt gatt, int mtu, int status) {
+            Log.i(TAG, "[MTU] Negociado: " + mtu + " bytes (status=" + status + ")");
+            // Após MTU negociado, descobre os serviços GATT
+            if (ActivityCompat.checkSelfPermission(BluetoothService.this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                gatt.discoverServices();
             }
         }
 
