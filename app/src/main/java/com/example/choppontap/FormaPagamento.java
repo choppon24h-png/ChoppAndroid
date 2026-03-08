@@ -1,7 +1,5 @@
 package com.example.choppontap;
 
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -66,11 +64,8 @@ import okhttp3.ResponseBody;
  *  - Logs detalhados para facilitar diagnóstico futuro
  *
  * MELHORIAS v3.1.0 (Android) — sincronizado com API chopponERP v3.0.0:
- *  1. updateQrCode(): exibe o código EMV "copia e cola" (pix_code) abaixo do
- *     QR Code com botão "COPIAR CÓDIGO PIX" usando ClipboardManager.
- *  2. updateQrCode(): exibe placeholder e mensagem de erro quando qr_code
- *     vier vazio ou inválido, evitando tela em branco.
- *  3. verifyPayment(): aceita checkout_status "PAID", "APPROVED" e "COMPLETED"
+ *  1. updateQrCode(): exibe o QR Code PIX. Mostra mensagem de espera se não carregar.
+ *  2. verifyPayment(): aceita checkout_status "PAID", "APPROVED" e "COMPLETED"
  *     além de "SUCCESSFUL", cobrindo variações da resposta da SumUp para PIX.
  */
 public class FormaPagamento extends AppCompatActivity {
@@ -171,22 +166,7 @@ public class FormaPagamento extends AppCompatActivity {
             }
         });
 
-        // ── Botão copiar código PIX (v3.1.0) ─────────────────────────────────
-        if (btnCopiarPix != null) {
-            btnCopiarPix.setOnClickListener(v -> {
-                if (txtPixCode != null
-                        && txtPixCode.getText() != null
-                        && !txtPixCode.getText().toString().isEmpty()) {
-                    ClipboardManager clipboard =
-                            (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                    ClipData clip = ClipData.newPlainText("PIX",
-                            txtPixCode.getText().toString());
-                    clipboard.setPrimaryClip(clip);
-                    Toast.makeText(this, "Código PIX copiado!", Toast.LENGTH_SHORT).show();
-                    Log.i(TAG, "📋 Código PIX copiado para a área de transferência.");
-                }
-            });
-        }
+        // btnCopiarPix: funcionalidade de código copia e cola desabilitada
 
         updateUIState(STATE_CHOOSING);
     }
@@ -567,16 +547,11 @@ public class FormaPagamento extends AppCompatActivity {
     }
 
     /**
-     * Atualiza a tela PIX com o QR Code e o código "copia e cola".
-     *
-     * MELHORIA v3.1.0:
-     *  1. Exibe qr_code (Base64) no ImageView. Se vazio ou inválido, exibe
-     *     uma mensagem de erro orientando o usuário a usar o código copia e cola.
-     *  2. Exibe pix_code (código EMV) abaixo do QR Code com botão "COPIAR CÓDIGO PIX".
-     *     O botão usa ClipboardManager para copiar o código para a área de transferência.
+     * Atualiza a tela PIX exibindo apenas o QR Code.
+     * Exibe mensagem de espera se o QR Code não estiver disponível.
+     * Os elementos de código copia e cola foram desabilitados.
      */
     public void updateQrCode(Qr qr) {
-        // ── 1. Exibir imagem do QR Code ───────────────────────────────────────
         if (qr.qr_code != null && !qr.qr_code.isEmpty()) {
             try {
                 byte[] b   = Base64.decode(qr.qr_code, Base64.DEFAULT);
@@ -588,34 +563,18 @@ public class FormaPagamento extends AppCompatActivity {
                         Log.d(TAG, "✅ QR Code exibido com sucesso (" + b.length + " bytes)");
                     });
                 } else {
-                    // decode retornou null (dados corrompidos)
-                    showQrError("QR Code inválido. Use o código copia e cola abaixo.");
-                    Log.w(TAG, "⚠️ BitmapFactory.decodeByteArray retornou null (dados corrompidos)");
+                    showQrError("Aguardando QR Code...");
+                    Log.w(TAG, "⚠️ BitmapFactory.decodeByteArray retornou null");
                 }
             } catch (Exception e) {
-                showQrError("QR Code indisponível. Use o código copia e cola abaixo.");
+                showQrError("Erro ao carregar QR Code. Tente novamente.");
                 Log.e(TAG, "❌ Erro ao decodificar QR Code Base64: " + e.getMessage());
             }
         } else {
-            // qr_code vazio ou nulo — servidor não conseguiu gerar a imagem
-            showQrError("QR Code indisponível. Use o código copia e cola abaixo.");
+            showQrError("Aguardando QR Code...");
             Log.w(TAG, "⚠️ qr_code vazio ou nulo na resposta da API");
         }
-
-        // ── 2. Exibir código EMV "copia e cola" ───────────────────────────────
-        if (qr.pix_code != null && !qr.pix_code.isEmpty()) {
-            runOnUiThread(() -> {
-                if (txtPixCodeLabel != null) txtPixCodeLabel.setVisibility(View.VISIBLE);
-                if (txtPixCode != null) {
-                    txtPixCode.setText(qr.pix_code);
-                    txtPixCode.setVisibility(View.VISIBLE);
-                }
-                if (btnCopiarPix != null) btnCopiarPix.setVisibility(View.VISIBLE);
-                Log.d(TAG, "✅ Código PIX EMV exibido (" + qr.pix_code.length() + " chars)");
-            });
-        } else {
-            Log.w(TAG, "⚠️ pix_code vazio ou nulo — botão 'Copiar' não será exibido");
-        }
+        // txtPixCodeLabel, txtPixCode e btnCopiarPix permanecem gone (desabilitados)
     }
 
     /**
@@ -623,11 +582,10 @@ public class FormaPagamento extends AppCompatActivity {
      */
     private void showQrError(String mensagem) {
         runOnUiThread(() -> {
+            // Exibe apenas o placeholder no ImageView, sem texto adicional
             imageView.setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
-            if (txtQrError != null) {
-                txtQrError.setText(mensagem);
-                txtQrError.setVisibility(View.VISIBLE);
-            }
+            Log.w(TAG, "⚠️ showQrError: " + mensagem);
+            // txtQrError, txtPixCode, txtPixCodeLabel e btnCopiarPix permanecem gone
         });
     }
 
