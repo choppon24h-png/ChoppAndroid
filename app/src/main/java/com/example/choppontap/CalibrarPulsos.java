@@ -168,6 +168,7 @@ public class CalibrarPulsos extends AppCompatActivity {
         btnTimeout         = findViewById(R.id.btnTimeout);
         btnLiberacaoContinua = findViewById(R.id.btnLiberacaoContinua);
         Button btnConfig   = findViewById(R.id.btnConfig);
+        Button btnVoltar   = findViewById(R.id.btnVoltar);
         EditText novaQtd   = findViewById(R.id.edtNovoTimeout);
 
         // Garante que a tela está visível (defesa contra visibility=gone residual)
@@ -239,6 +240,15 @@ public class CalibrarPulsos extends AppCompatActivity {
         // Modificar Timeout: navega para ModificarTimeout
         btnTimeout.setOnClickListener(v ->
                 startActivity(new Intent(CalibrarPulsos.this, ModificarTimeout.class)));
+
+        // Voltar para Home
+        btnVoltar.setOnClickListener(v -> {
+            Log.d(TAG, "Voltando para Home");
+            Intent intent = new Intent(CalibrarPulsos.this, Home.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(intent);
+            finish();
+        });
 
         Log.d(TAG, "onCreate concluído — layout visível");
     }
