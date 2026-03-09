@@ -193,6 +193,37 @@ public class BluetoothService extends Service {
         mBluetoothGatt = device.connectGatt(this, false, mGattCallback);
     }
 
+    /**
+     * Desconecta o GATT e desabilita o auto-reconnect.
+     * Chamado por Home.redirecionarOffline() e ServiceTools.desconectarBluetooth()
+     * quando a TAP é desativada intencionalmente pelo técnico.
+     */
+    public void disconnect() {
+        mAutoReconnect = false;
+        closeGatt();
+        Log.i(TAG, "[BLE] disconnect() — mAutoReconnect=false, GATT fechado");
+    }
+
+    /**
+     * Reabilita o auto-reconnect após uma desativação intencional.
+     * Chamado por Home.onServiceConnected() e Home.onResume() para garantir
+     * que quedas de conexão sejam recuperadas automaticamente.
+     */
+    public void enableAutoReconnect() {
+        mAutoReconnect = true;
+        Log.i(TAG, "[BLE] enableAutoReconnect() — mAutoReconnect=true");
+    }
+
+    /**
+     * Retorna o BluetoothDevice atualmente conectado via GATT, ou null.
+     * Usado por PagamentoConcluido para remover o bond inválido ao receber
+     * ERROR:NOT_AUTHENTICATED do ESP32.
+     */
+    public BluetoothDevice getBoundDevice() {
+        if (mBluetoothGatt == null) return null;
+        return mBluetoothGatt.getDevice();
+    }
+
     public void write(String data) {
         if (mBluetoothGatt != null && mWriteCharacteristic != null) {
             mWriteCharacteristic.setValue(data.getBytes());
@@ -211,7 +242,12 @@ public class BluetoothService extends Service {
         }
     }
 
-    private void removeBond(BluetoothDevice device) {
+    /**
+     * Remove o bond (vínculo de pareamento) armazenado no Android para o dispositivo.
+     * O método removeBond() é @hide no SDK, portanto acessado via reflexão.
+     * Necessário quando o ESP32 é resetado e apaga seus bonds, causando GATT_AUTH_FAIL.
+     */
+    public static void removeBond(BluetoothDevice device) {
         try {
             Method m = device.getClass().getMethod("removeBond", (Class[]) null);
             m.invoke(device, (Object[]) null);
