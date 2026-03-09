@@ -224,12 +224,28 @@ public class PagamentoConcluido extends AppCompatActivity {
 
         if (msg.contains("ERROR:NOT_AUTHEN")) {
             cancelarWatchdog();
-            Log.e(TAG, "ESP32: NOT_AUTHENTICATED");
-            atualizarStatus("❌ Erro de autenticação. Reconectando...");
+            Log.e(TAG, "[BLE] ERROR:NOT_AUTHENTICATED recebido do ESP32");
+            Log.e(TAG, "[BLE] Causa provável: bond Android inválido (ESP32 não reconhece o vínculo).");
+            Log.e(TAG, "[BLE] Ação: removendo bond local e reconectando para forçar novo pareamento com PIN.");
+            atualizarStatus("🔑 Reautenticando dispositivo...");
             mAuthOk = false;
+            mComandoEnviado = false; // Permite reenvio após novo pareamento
             if (mBluetoothService != null) {
+                // Remove o bond inválido antes de reconectar.
+                // Isso força o Android a iniciar um novo pareamento com PIN (259087),
+                // que será injetado automaticamente pelo mPairingReceiver no BluetoothService.
+                android.bluetooth.BluetoothAdapter adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+                if (adapter != null && mBluetoothService.connected()) {
+                    android.bluetooth.BluetoothDevice dev = mBluetoothService.getBoundDevice();
+                    if (dev != null) {
+                        BluetoothService.removeBond(dev);
+                        Log.i(TAG, "[BLE] Bond removido para " + dev.getAddress());
+                    }
+                }
                 mBluetoothService.disconnect();
-                new Handler(Looper.getMainLooper()).postDelayed(() -> mBluetoothService.scanLeDevice(true), 1500);
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    if (mBluetoothService != null) mBluetoothService.scanLeDevice(true);
+                }, 2000);
             }
             return;
         }
