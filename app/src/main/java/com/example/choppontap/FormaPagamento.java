@@ -341,10 +341,14 @@ public class FormaPagamento extends AppCompatActivity {
 
     private void navigateToSuccess() {
         runOnUiThread(() -> {
+            Log.i(TAG, "[PAYMENT] Pagamento confirmado");
+            Log.i(TAG, "[PAYMENT] Volume selecionado: " + quantidade + " ml");
+            Log.i(TAG, "[PAYMENT] checkout_id: " + checkout_id);
             stopRunnable();
             Intent it = new Intent(this, PagamentoConcluido.class);
             it.putExtra("qtd_ml",     quantidade);
             it.putExtra("checkout_id", checkout_id);
+            Log.i(TAG, "[PAYMENT] Navegando para PagamentoConcluido com qtd_ml=" + quantidade);
             startActivity(it);
             finish();
         });

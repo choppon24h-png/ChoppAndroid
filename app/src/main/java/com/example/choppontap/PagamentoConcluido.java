@@ -59,6 +59,12 @@ public class PagamentoConcluido extends AppCompatActivity {
     private boolean mAuthOk = false;
     private boolean mValvulaAberta = false;
     private boolean mLiberacaoFinalizada = false;
+    /**
+     * Protege contra envio duplicado de $ML após reconexão BLE.
+     * Zerado apenas quando a liberação é concluída (ML recebido) ou
+     * quando o usuário pressiona "Liberar Restante" explicitamente.
+     */
+    private boolean mComandoEnviado = false;
 
     // ── Dados do pedido ───────────────────────────────────────────────────────
     private String checkout_id;
@@ -108,22 +114,24 @@ public class PagamentoConcluido extends AppCompatActivity {
 
             switch (action) {
                 case BluetoothService.ACTION_WRITE_READY:
-                    Log.i(TAG, "ACTION_WRITE_READY recebido — canal NUS pronto");
+                    Log.i(TAG, "[BLE] Canal NUS pronto (ACTION_WRITE_READY)");
                     if (!mAuthOk) {
-                        Log.d(TAG, "Firmware sem AUTH — enviando $ML diretamente");
+                        Log.d(TAG, "[BLE] Firmware sem AUTH — enviando $ML diretamente");
                         enviarComandoML(qtd_ml);
+                    } else {
+                        Log.d(TAG, "[BLE] mAuthOk=true — aguardando AUTH:OK do firmware antes de enviar $ML");
                     }
                     break;
 
                 case BluetoothService.ACTION_CONNECTION_STATUS:
                     String status = intent.getStringExtra(BluetoothService.EXTRA_STATUS);
                     if ("disconnected".equals(status)) {
-                        Log.w(TAG, "BLE desconectado durante liberação");
+                        Log.w(TAG, "[BLE] Dispositivo DESCONECTADO durante liberação");
                         atualizarStatus("⚠ Reconectando ao dispositivo...");
                         cancelarWatchdog();
                         if (mBluetoothService != null) mBluetoothService.scanLeDevice(true);
                     } else if ("connected".equals(status)) {
-                        Log.i(TAG, "BLE reconectado");
+                        Log.i(TAG, "[BLE] Conectado ao dispositivo");
                         atualizarStatus("✓ Conectado");
                     }
                     break;
@@ -140,7 +148,7 @@ public class PagamentoConcluido extends AppCompatActivity {
         Log.d(TAG, "ESP32 → Android: [" + msg + "]");
 
         if ("AUTH:OK".equalsIgnoreCase(msg)) {
-            Log.i(TAG, "ESP32 autenticado. Enviando $ML:" + qtd_ml);
+            Log.i(TAG, "[BLE] Resposta recebida: AUTH:OK — dispositivo autenticado");
             mAuthOk = true;
             atualizarStatus("✓ Dispositivo autenticado");
             enviarComandoML(qtd_ml);
@@ -148,7 +156,7 @@ public class PagamentoConcluido extends AppCompatActivity {
         }
 
         if ("OK".equalsIgnoreCase(msg)) {
-            Log.i(TAG, "Válvula ABERTA. Watchdog iniciado (" + WATCHDOG_TIMEOUT_MS / 1000 + "s)");
+            Log.i(TAG, "[BLE] Resposta recebida: OK — válvula ABERTA. Watchdog iniciado (" + WATCHDOG_TIMEOUT_MS / 1000 + "s)");
             mValvulaAberta = true;
             atualizarStatus("🍺 Servindo...");
             iniciarWatchdog();
@@ -187,7 +195,9 @@ public class PagamentoConcluido extends AppCompatActivity {
         if (msg.startsWith("ML:") || "ML".equalsIgnoreCase(msg)) {
             cancelarWatchdog();
             mValvulaAberta = false;
-            Log.i(TAG, "Válvula FECHADA. liberado=" + liberado + "ml");
+            mComandoEnviado = false; // Reset: permite novo envio se usuário pressionar "Liberar Restante"
+            Log.i(TAG, "[BLE] Resposta recebida: " + msg + " — válvula FECHADA. liberado=" + liberado + "ml");
+            Log.i(TAG, "[APP] Operação concluída — liberado=" + liberado + "ml de " + qtd_ml + "ml solicitados");
 
             if (!mLiberacaoFinalizada) {
                 mLiberacaoFinalizada = true;
@@ -252,12 +262,21 @@ public class PagamentoConcluido extends AppCompatActivity {
     }
 
     private void enviarComandoML(int volumeMl) {
-        if (mBluetoothService == null || !mBluetoothService.connected()) return;
+        if (mBluetoothService == null || !mBluetoothService.connected()) {
+            Log.e(TAG, "[BLE] ERRO: enviarComandoML(" + volumeMl + ") chamado mas BLE não está conectado!");
+            return;
+        }
+        if (mComandoEnviado) {
+            Log.w(TAG, "[BLE] DUPLICAÇÃO BLOQUEADA: $ML já foi enviado (mComandoEnviado=true). Ignorando envio duplicado.");
+            return;
+        }
+        mComandoEnviado = true;
         mlsSolicitado = volumeMl;
         String cmd = "$ML:" + volumeMl;
-        Log.i(TAG, "Android → ESP32: [" + cmd + "]");
+        Log.i(TAG, "[BLE] Enviando comando: " + cmd);
         atualizarStatus("⏳ Aguardando abertura da válvula...");
         mBluetoothService.write(cmd);
+        Log.i(TAG, "[BLE] Aguardando confirmação do dispositivo (resposta OK/AUTH:OK esperada)");
     }
 
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
@@ -266,9 +285,16 @@ public class PagamentoConcluido extends AppCompatActivity {
             mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
             mIsServiceBound = true;
             if (!mBluetoothService.connected()) {
+                Log.i(TAG, "[BLE] BluetoothService vinculado — iniciando scan BLE...");
                 mBluetoothService.scanLeDevice(true);
             } else {
-                if (!mAuthOk) enviarComandoML(qtd_ml);
+                Log.i(TAG, "[BLE] BluetoothService vinculado — BLE já conectado");
+                if (!mAuthOk) {
+                    Log.d(TAG, "[BLE] mAuthOk=false — enviando $ML diretamente (firmware sem AUTH)");
+                    enviarComandoML(qtd_ml);
+                } else {
+                    Log.d(TAG, "[BLE] mAuthOk=true — aguardando AUTH:OK do firmware");
+                }
             }
         }
 
@@ -296,6 +322,7 @@ public class PagamentoConcluido extends AppCompatActivity {
 
         qtd_ml      = Integer.parseInt(extras.get("qtd_ml").toString());
         checkout_id = extras.get("checkout_id").toString();
+        Log.i(TAG, "[APP] PagamentoConcluido iniciado — qtd_ml=" + qtd_ml + " | checkout_id=" + checkout_id);
 
         btnLiberar  = findViewById(R.id.btnLiberarRestante);
         imageView   = findViewById(R.id.imageBeer2);
@@ -323,16 +350,22 @@ public class PagamentoConcluido extends AppCompatActivity {
 
         sendRequestInicio(checkout_id);
 
+        Log.i(TAG, "[BLE] Conectando ao dispositivo...");
         Intent serviceIntent = new Intent(this, BluetoothService.class);
         startService(serviceIntent);
         bindService(serviceIntent, mServiceConnection, Context.BIND_AUTO_CREATE);
 
         btnLiberar.setOnClickListener(v -> {
-            if (mBluetoothService == null || !mBluetoothService.connected()) return;
+            if (mBluetoothService == null || !mBluetoothService.connected()) {
+                Log.e(TAG, "[BLE] Botão 'Liberar Restante' pressionado mas BLE não está conectado!");
+                return;
+            }
             int restante = qtd_ml - liberado;
             if (restante <= 0) return;
+            Log.i(TAG, "[APP] Usuário solicitou liberação do restante: " + restante + " ml");
             btnLiberar.setVisibility(View.GONE);
             mLiberacaoFinalizada = false;
+            mComandoEnviado = false; // Permite reenvio explicitamente autorizado pelo usuário
             if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
             enviarComandoML(restante);
         });

@@ -90,12 +90,14 @@ public class BluetoothService extends Service {
             }
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                Log.i(TAG, "[BLE] Conectado ao dispositivo: " + gatt.getDevice().getAddress());
                 broadcastConnectionStatus("connected");
                 if (ActivityCompat.checkSelfPermission(BluetoothService.this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                     // Negocia MTU máximo (512 bytes) antes de descobrir serviços.
                     // Sem isso, o BLE usa MTU padrão de 23 bytes (payload útil = 20 bytes),
                     // truncando mensagens como "ERROR:NOT_AUTHENTICATED" (23 bytes) para
                     // "ERROR:NOT_AUTHENTICA" (20 bytes) — bug confirmado no log 2026-03-07.
+                    Log.d(TAG, "[BLE] Solicitando MTU=512...");
                     gatt.requestMtu(512);
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
@@ -117,12 +119,18 @@ public class BluetoothService extends Service {
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.i(TAG, "[BLE] Serviços GATT descobertos com sucesso");
                 BluetoothGattService service = gatt.getService(NUS_SERVICE_UUID);
                 if (service != null) {
+                    Log.i(TAG, "[BLE] Serviço NUS encontrado — canal de escrita pronto");
                     mWriteCharacteristic = service.getCharacteristic(NUS_RX_CHARACTERISTIC_UUID);
                     BluetoothGattCharacteristic tx = service.getCharacteristic(NUS_TX_CHARACTERISTIC_UUID);
                     setupNotifications(gatt, tx);
+                } else {
+                    Log.e(TAG, "[BLE] ERRO: Serviço NUS não encontrado no dispositivo! UUID esperado: " + NUS_SERVICE_UUID);
                 }
+            } else {
+                Log.e(TAG, "[BLE] ERRO: onServicesDiscovered status=" + status + " (esperado GATT_SUCCESS=0)");
             }
         }
 
@@ -133,7 +141,9 @@ public class BluetoothService extends Service {
 
         @Override
         public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
-            broadcastData(new String(characteristic.getValue()));
+            String received = new String(characteristic.getValue());
+            Log.d(TAG, "[BLE] Recebido do ESP32: [" + received + "]");
+            broadcastData(received);
         }
     };
 
@@ -160,7 +170,7 @@ public class BluetoothService extends Service {
         }
 
         if (mTargetMac != null && !mScanning) {
-            Log.i(TAG, "scanLeDevice: MAC salvo encontrado (" + mTargetMac + "), conectando diretamente...");
+            Log.i(TAG, "[BLE] MAC salvo encontrado (" + mTargetMac + "), conectando diretamente...");
             broadcastConnectionStatus("conectando...");
             connectToDevice(mBluetoothAdapter.getRemoteDevice(mTargetMac));
             return;
@@ -170,6 +180,7 @@ public class BluetoothService extends Service {
 
         if (enable && !mScanning) {
             mScanning = true;
+            Log.i(TAG, "[BLE] Conectando ao dispositivo (scan BLE iniciado, timeout=15s)");
             broadcastConnectionStatus("conectando...");
             ScanSettings settings = new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
 
@@ -192,6 +203,7 @@ public class BluetoothService extends Service {
             broadcastDeviceFound(device);
 
             if (name != null && name.startsWith("CHOPP_")) {
+                Log.i(TAG, "[BLE] Dispositivo CHOPP encontrado: " + name + " (" + device.getAddress() + ")");
                 mTargetMac = device.getAddress();
                 saveTargetMac(mTargetMac);
                 stopScan();
@@ -246,11 +258,25 @@ public class BluetoothService extends Service {
     }
 
     public void write(String data) {
-        if (connected() && mWriteCharacteristic != null) {
-            mWriteCharacteristic.setValue(data.getBytes());
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                mBluetoothGatt.writeCharacteristic(mWriteCharacteristic);
+        Log.d(TAG, "[BLE] write() chamado com: [" + data + "]");
+        if (!connected()) {
+            Log.e(TAG, "[BLE] ERRO: write() chamado mas BLE não está conectado! Dado descartado: [" + data + "]");
+            return;
+        }
+        if (mWriteCharacteristic == null) {
+            Log.e(TAG, "[BLE] ERRO: write() chamado mas mWriteCharacteristic é null! Canal NUS não pronto. Dado descartado: [" + data + "]");
+            return;
+        }
+        mWriteCharacteristic.setValue(data.getBytes());
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+            boolean ok = mBluetoothGatt.writeCharacteristic(mWriteCharacteristic);
+            if (ok) {
+                Log.i(TAG, "[BLE] Comando enviado com sucesso: [" + data + "]");
+            } else {
+                Log.e(TAG, "[BLE] FALHA ao enviar comando: [" + data + "] — writeCharacteristic retornou false");
             }
+        } else {
+            Log.e(TAG, "[BLE] ERRO: sem permissão BLUETOOTH_CONNECT para escrever");
         }
     }
 
