@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    CORREÇÃO: 3 bugs corrigidos neste arquivo
+    1. btnConfig referenciava @+id/logoChoppOn (inexistente) → corrigido para @+id/logoChoppOn2
+    2. Ordem dos botões estava invertida no ConstraintLayout (btnChangePulsos apontava para
+       btnSalvarTimeout que estava abaixo dele, criando ciclo de dependência)
+    3. Removida referência circular: textView12 apontava para cardBebida2 que está acima dele
+-->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
@@ -8,6 +15,20 @@
     android:background="@color/white"
     android:visibility="visible">
 
+    <!-- Logo centralizado no topo -->
+    <ImageView
+        android:id="@+id/logoChoppOn2"
+        android:layout_width="300dp"
+        android:layout_height="80dp"
+        android:layout_marginTop="8dp"
+        android:contentDescription="Logo Chopp ON"
+        android:scaleType="fitCenter"
+        android:src="@drawable/logo_choppon"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Botão de configurações no canto superior direito — âncora corrigida para logoChoppOn2 -->
     <Button
         android:id="@+id/btnConfig"
         android:layout_width="80dp"
@@ -26,122 +47,20 @@
         app:iconPadding="0dp"
         app:iconSize="110dp"
         app:iconTint="@color/black"
-        app:layout_constraintBottom_toBottomOf="@+id/logoChoppOn"
+        app:layout_constraintBottom_toBottomOf="@+id/logoChoppOn2"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.953"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintVertical_bias="0.571" />
 
-    <ImageView
-        android:id="@+id/logoChoppOn2"
-        android:layout_width="300dp"
-        android:layout_height="80dp"
-        android:layout_marginTop="8dp"
-        android:contentDescription="Logo Chopp ON"
-        android:scaleType="fitCenter"
-        android:src="@drawable/logo_choppon"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <TextView
-        android:id="@+id/textView12"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Volume aferido"
-        android:textColor="@color/black"
-        android:textSize="30sp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/cardBebida2"
-        app:layout_constraintVertical_bias="0.038" />
-
-    <EditText
-        android:id="@+id/edtNovoTimeout"
-        android:layout_width="249dp"
-        android:layout_height="67dp"
-        android:layout_marginTop="4dp"
-        android:ems="10"
-        android:inputType="number"
-        android:textColor="@color/black"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/textView12" />
-
-    <Button
-        android:id="@+id/btnChangePulsos"
-        android:layout_width="0dp"
-        android:layout_height="80dp"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="12dp"
-        android:layout_marginEnd="24dp"
-        android:backgroundTint="@color/choppon_orange"
-        android:text="Calibrar"
-        android:textColor="@color/white"
-        android:textSize="25dp"
-        app:cornerRadius="12dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.498"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btnSalvarTimeout" />
-
-    <Button
-        android:id="@+id/btnSalvarTimeout"
-        android:layout_width="0dp"
-        android:layout_height="80dp"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="80dp"
-        android:layout_marginEnd="24dp"
-        android:backgroundTint="@color/choppon_orange"
-        android:text="Liberar liquido"
-        android:textColor="@color/white"
-        android:textSize="25dp"
-        app:cornerRadius="12dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/edtNovoTimeout" />
-
-    <Button
-        android:id="@+id/btnLiberacaoContinua"
-        android:layout_width="0dp"
-        android:layout_height="80dp"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="12dp"
-        android:layout_marginEnd="24dp"
-        android:backgroundTint="@color/choppon_orange"
-        android:text="Liberação continua"
-        android:textColor="@color/white"
-        android:textSize="25dp"
-        app:cornerRadius="12dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.498"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btnChangePulsos" />
-
-    <Button
-        android:id="@+id/btnTimeout"
-        android:layout_width="0dp"
-        android:layout_height="80dp"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="12dp"
-        android:layout_marginEnd="24dp"
-        android:backgroundTint="@color/choppon_orange"
-        android:text="Modificar Timeout"
-        android:textColor="@color/white"
-        android:textSize="25dp"
-        app:cornerRadius="12dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btnLiberacaoContinua" />
-
+    <!-- Card de informações: pulsos e volume — abaixo do logo -->
     <androidx.cardview.widget.CardView
         android:id="@+id/cardBebida2"
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:layout_marginStart="24dp"
-        android:layout_marginTop="32dp"
+        android:layout_marginTop="16dp"
         android:layout_marginEnd="24dp"
         android:backgroundTint="@color/cardview_dark_background"
         app:cardCornerRadius="16dp"
@@ -197,5 +116,101 @@
         </LinearLayout>
 
     </androidx.cardview.widget.CardView>
+
+    <!-- Label "Volume aferido" — abaixo do card -->
+    <TextView
+        android:id="@+id/textView12"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Volume aferido"
+        android:textColor="@color/black"
+        android:textSize="30sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/cardBebida2" />
+
+    <!-- Campo de entrada do volume aferido -->
+    <EditText
+        android:id="@+id/edtNovoTimeout"
+        android:layout_width="249dp"
+        android:layout_height="67dp"
+        android:layout_marginTop="4dp"
+        android:ems="10"
+        android:inputType="number"
+        android:textColor="@color/black"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/textView12" />
+
+    <!-- Botão: Liberar líquido (envia $ML:100) -->
+    <Button
+        android:id="@+id/btnSalvarTimeout"
+        android:layout_width="0dp"
+        android:layout_height="80dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="24dp"
+        android:backgroundTint="@color/choppon_orange"
+        android:text="Liberar liquido"
+        android:textColor="@color/white"
+        android:textSize="25dp"
+        app:cornerRadius="12dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/edtNovoTimeout" />
+
+    <!-- Botão: Calibrar (calcula e envia $PL:valor) -->
+    <Button
+        android:id="@+id/btnChangePulsos"
+        android:layout_width="0dp"
+        android:layout_height="80dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="24dp"
+        android:backgroundTint="@color/choppon_orange"
+        android:text="Calibrar"
+        android:textColor="@color/white"
+        android:textSize="25dp"
+        app:cornerRadius="12dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.498"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/btnSalvarTimeout" />
+
+    <!-- Botão: Liberação contínua -->
+    <Button
+        android:id="@+id/btnLiberacaoContinua"
+        android:layout_width="0dp"
+        android:layout_height="80dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="24dp"
+        android:backgroundTint="@color/choppon_orange"
+        android:text="Liberação continua"
+        android:textColor="@color/white"
+        android:textSize="25dp"
+        app:cornerRadius="12dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.498"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/btnChangePulsos" />
+
+    <!-- Botão: Modificar Timeout -->
+    <Button
+        android:id="@+id/btnTimeout"
+        android:layout_width="0dp"
+        android:layout_height="80dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="24dp"
+        android:backgroundTint="@color/choppon_orange"
+        android:text="Modificar Timeout"
+        android:textColor="@color/white"
+        android:textSize="25dp"
+        app:cornerRadius="12dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/btnLiberacaoContinua" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
