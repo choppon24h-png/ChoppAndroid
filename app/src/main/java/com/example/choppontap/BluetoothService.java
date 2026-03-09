@@ -35,6 +35,11 @@ public class BluetoothService extends Service {
 
     private static final String TAG = "BLE_ADVANCED";
 
+    // ✅ ADICIONADO: Constantes para comunicação via Handler (obtidas do erro em ConnectedThread)
+    public static final int MESSAGE_READ = 0;
+    public static final int MESSAGE_WRITE = 1;
+    public static final int MESSAGE_CONNECTION_LOST = 2;
+
     // ── PIN de autenticação do ESP32 ──────────────────────────────────────────
     private static final String ESP32_PIN = "259087";
 
@@ -119,7 +124,7 @@ public class BluetoothService extends Service {
             int variant = intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT, BluetoothDevice.ERROR);
             Log.i(TAG, "[BLE] Pairing request — variant=" + variant);
 
-            // ✅ CORREÇÃO: Usando as constantes locais para evitar erro de compilação
+            // Usando as constantes locais para evitar erro de compilação
             if (variant == VARIANT_PIN || variant == VARIANT_PASSKEY) {
                 boolean ok = device.setPin(ESP32_PIN.getBytes());
                 Log.i(TAG, "[BLE] setPin(" + ESP32_PIN + ") → " + ok);
