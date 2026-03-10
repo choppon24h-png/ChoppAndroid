@@ -66,6 +66,7 @@ public class BluetoothService extends Service {
     private static final int VARIANT_PIN                  = 0;
     private static final int VARIANT_PASSKEY              = 1;
     private static final int VARIANT_PASSKEY_CONFIRMATION = 2;
+    private static final int VARIANT_CONSENT              = 3; // OOB / Just Works consent
 
     // ── UUIDs NUS ─────────────────────────────────────────────────────────────
     private static final UUID NUS_SERVICE_UUID           = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
@@ -194,8 +195,18 @@ public class BluetoothService extends Service {
                 device.setPairingConfirmation(true);
                 Log.i(TAG, "[BLE] Numeric Comparison confirmado automaticamente");
                 abortBroadcast();
+            } else if (variant == VARIANT_CONSENT) {
+                // PAIRING_VARIANT_CONSENT (3): Just Works / OOB — confirmar automaticamente
+                device.setPairingConfirmation(true);
+                Log.i(TAG, "[BLE] CONSENT (variant=3) confirmado automaticamente");
+                abortBroadcast();
             } else {
-                Log.w(TAG, "[BLE] Variante de pareamento desconhecida: " + variant);
+                // Variante desconhecida — tentar confirmar como último recurso
+                Log.w(TAG, "[BLE] Variante desconhecida: " + variant + " — tentando setPairingConfirmation(true)");
+                try { device.setPairingConfirmation(true); } catch (Exception e) {
+                    Log.e(TAG, "[BLE] setPairingConfirmation falhou: " + e.getMessage());
+                }
+                abortBroadcast();
             }
         }
     };
@@ -315,7 +326,17 @@ public class BluetoothService extends Service {
 
             BluetoothGattService service = gatt.getService(NUS_SERVICE_UUID);
             if (service == null) {
-                Log.e(TAG, "[BLE] Serviço NUS não encontrado!");
+                // NUS não encontrado. Pode ocorrer quando o GATT conecta durante BOND_BONDING.
+                // Aguardar bond concluir e redescobrir serviços.
+                Log.w(TAG, "[BLE] Serviço NUS não encontrado! bondState="
+                        + bondStateName(bondState)
+                        + " — aguardando bond e redescobrir serviços em 2s...");
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    if (mBluetoothGatt != null) {
+                        Log.i(TAG, "[BLE] Redescobrir serviços após NUS não encontrado...");
+                        mBluetoothGatt.discoverServices();
+                    }
+                }, 2000);
                 return;
             }
             mWriteCharacteristic = service.getCharacteristic(NUS_RX_CHARACTERISTIC_UUID);
