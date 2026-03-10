@@ -270,11 +270,29 @@ public class BluetoothService extends Service {
             mWriteCharacteristic = service.getCharacteristic(NUS_RX_CHARACTERISTIC_UUID);
             BluetoothGattCharacteristic txChar = service.getCharacteristic(NUS_TX_CHARACTERISTIC_UUID);
             setupNotifications(gatt, txChar);
-            Log.i(TAG, "[BLE] Serviço NUS encontrado. Notificações ativadas."
-                    + " Estado: CONNECTED — aguardando AUTH:OK do ESP32...");
-            // NÃO emite ACTION_WRITE_READY aqui.
-            // O broadcast só será emitido quando o ESP32 enviar AUTH:OK
-            // e o estado transitar para READY (ver notifyAuthOk()).
+
+            // ── Verificar se o dispositivo já possui bond válido ──────────────
+            // Quando o bond JÁ EXISTE (pareamento anterior), o ESP32 NÃO repete
+            // onAuthenticationComplete() e portanto NÃO envia AUTH:OK novamente.
+            // Nesse caso, o canal já está autenticado — transitar para READY
+            // imediatamente e emitir ACTION_WRITE_READY sem aguardar AUTH:OK.
+            //
+            // Quando NÃO há bond (primeiro pareamento), o ESP32 fará o handshake
+            // de segurança BLE, chamará onAuthenticationComplete() e enviará
+            // AUTH:OK — que será tratado em onCharacteristicChanged().
+            BluetoothDevice device = gatt.getDevice();
+            boolean jaBonded = (device.getBondState() == BluetoothDevice.BOND_BONDED);
+
+            if (jaBonded) {
+                Log.i(TAG, "[BLE] Dispositivo JÁ BONDED (" + device.getAddress() + ")."
+                        + " ESP32 não enviará AUTH:OK novamente — transitando para READY diretamente.");
+                transitionTo(BleState.READY);
+                broadcastWriteReady();
+            } else {
+                Log.i(TAG, "[BLE] Dispositivo SEM bond. Aguardando pareamento BLE com PIN "
+                        + ESP32_PIN + " → AUTH:OK do ESP32...");
+                // ACTION_WRITE_READY será emitido em onCharacteristicChanged quando AUTH:OK chegar.
+            }
         }
 
         @Override
@@ -283,12 +301,18 @@ public class BluetoothService extends Service {
             String data = new String(characteristic.getValue()).trim();
             Log.d(TAG, "[BLE] ESP32 → Android: [" + data + "]");
 
-            // AUTH:OK recebido: ESP32 concluiu o pareamento e está pronto.
+            // AUTH:OK recebido: ESP32 concluiu o pareamento (primeiro bond) e está pronto.
             // Transitar para READY e notificar PagamentoConcluido.
+            // Nota: se o dispositivo já estava bonded, o READY foi setado em
+            // onServicesDiscovered e este bloco é um no-op seguro.
             if ("AUTH:OK".equalsIgnoreCase(data)) {
                 Log.i(TAG, "[BLE] AUTH:OK recebido — transitando para estado READY");
-                transitionTo(BleState.READY);
-                broadcastWriteReady(); // ← ACTION_WRITE_READY emitido SOMENTE aqui
+                if (mBleState != BleState.READY) {
+                    transitionTo(BleState.READY);
+                    broadcastWriteReady();
+                } else {
+                    Log.d(TAG, "[BLE] AUTH:OK recebido mas já em READY (bond pré-existente) — ignorado");
+                }
             }
 
             // Propaga TODOS os dados (incluindo AUTH:OK, VP:, ML:, etc.) para a Activity
