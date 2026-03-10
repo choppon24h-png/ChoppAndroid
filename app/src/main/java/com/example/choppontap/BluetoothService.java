@@ -341,6 +341,20 @@ public class BluetoothService extends Service {
         return mBleState == BleState.READY;
     }
 
+    /**
+     * Força a transição para o estado READY e emite ACTION_WRITE_READY.
+     *
+     * Usado por PagamentoConcluido quando o serviço é recriado e o GATT já está
+     * conectado com bond válido (BOND_BONDED), mas o estado interno foi perdido
+     * (mBleState = DISCONNECTED). Nesse caso o ESP32 não enviará AUTH:OK novamente,
+     * então forçamos READY manualmente após confirmar que o bond existe.
+     */
+    public void forceReady() {
+        Log.i(TAG, "[BLE] forceReady() chamado — GATT conectado + BOND_BONDED → READY");
+        transitionTo(BleState.READY);
+        broadcastWriteReady();
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Configuração de notificações NUS
     // ─────────────────────────────────────────────────────────────────────────

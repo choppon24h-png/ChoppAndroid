@@ -349,10 +349,26 @@ public class PagamentoConcluido extends AppCompatActivity {
                 enviarComandoML(qtd_ml);
 
             } else if (mBluetoothService.connected()) {
-                // GATT conectado mas ainda não autenticado (aguardando AUTH:OK).
-                Log.i(TAG, "[BLE] BluetoothService vinculado — GATT conectado, aguardando AUTH:OK...");
-                atualizarStatus("⏳ Autenticando dispositivo...");
-                // Não envia $ML aqui. ACTION_WRITE_READY chegará quando AUTH:OK for recebido.
+                // GATT conectado mas estado BleState não é READY.
+                // Isso ocorre quando o BluetoothService foi recriado (novo processo/serviço)
+                // e perdeu o estado READY — mas o GATT físico ainda está conectado.
+                // Verificar o bondState do dispositivo para decidir:
+                //   BOND_BONDED  → canal já autenticado → forçar READY agora → enviar $ML
+                //   sem bond     → aguardar AUTH:OK (primeiro pareamento em andamento)
+                android.bluetooth.BluetoothDevice dev = mBluetoothService.getBoundDevice();
+                boolean jaBonded = (dev != null
+                        && dev.getBondState() == android.bluetooth.BluetoothDevice.BOND_BONDED);
+
+                if (jaBonded) {
+                    Log.i(TAG, "[BLE] BluetoothService vinculado — GATT conectado + BOND_BONDED."
+                            + " Forçando READY e enviando $ML.");
+                    atualizarStatus("✓ Dispositivo autenticado. Liberando...");
+                    mBluetoothService.forceReady(); // transita para READY e emite ACTION_WRITE_READY
+                } else {
+                    Log.i(TAG, "[BLE] BluetoothService vinculado — GATT conectado, sem bond. Aguardando AUTH:OK...");
+                    atualizarStatus("⏳ Autenticando dispositivo...");
+                    // ACTION_WRITE_READY chegará quando AUTH:OK for recebido.
+                }
 
             } else {
                 // Sem conexão: inicia scan/conexão.
