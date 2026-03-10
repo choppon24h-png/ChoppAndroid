@@ -342,37 +342,51 @@ public class PagamentoConcluido extends AppCompatActivity {
             mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
             mIsServiceBound   = true;
 
+            // ── DEBUG COMPLETO DO ESTADO AO VINCULAR ──────────────────────────
+            android.bluetooth.BluetoothDevice devDebug = mBluetoothService.getBoundDevice();
+            String bondDebug = (devDebug != null)
+                    ? (devDebug.getAddress() + " bondState="
+                        + (devDebug.getBondState() == android.bluetooth.BluetoothDevice.BOND_BONDED ? "BOND_BONDED" :
+                           devDebug.getBondState() == android.bluetooth.BluetoothDevice.BOND_BONDING ? "BOND_BONDING" :
+                           "BOND_NONE("+devDebug.getBondState()+")"))
+                    : "sem device (GATT nulo)";
+            Log.i(TAG, "[BLE] onServiceConnected:"
+                    + " bleState=" + mBluetoothService.getBleState().name()
+                    + " | isReady=" + mBluetoothService.isReady()
+                    + " | connected=" + mBluetoothService.connected()
+                    + " | " + bondDebug);
+            // ─────────────────────────────────────────────────────────────────
+
             if (mBluetoothService.isReady()) {
-                // Canal já autenticado (raro: Activity recriada com serviço já em READY).
-                Log.i(TAG, "[BLE] BluetoothService vinculado — já em estado READY. Enviando $ML.");
+                Log.i(TAG, "[BLE] → CAMINHO 1: já em READY. Enviando $ML imediatamente.");
                 atualizarStatus("✓ Dispositivo pronto. Liberando...");
                 enviarComandoML(qtd_ml);
 
             } else if (mBluetoothService.connected()) {
-                // GATT conectado mas estado BleState não é READY.
-                // Isso ocorre quando o BluetoothService foi recriado (novo processo/serviço)
-                // e perdeu o estado READY — mas o GATT físico ainda está conectado.
-                // Verificar o bondState do dispositivo para decidir:
-                //   BOND_BONDED  → canal já autenticado → forçar READY agora → enviar $ML
-                //   sem bond     → aguardar AUTH:OK (primeiro pareamento em andamento)
                 android.bluetooth.BluetoothDevice dev = mBluetoothService.getBoundDevice();
-                boolean jaBonded = (dev != null
-                        && dev.getBondState() == android.bluetooth.BluetoothDevice.BOND_BONDED);
+                int bondState = (dev != null) ? dev.getBondState() : -1;
+                boolean jaBonded = (bondState == android.bluetooth.BluetoothDevice.BOND_BONDED);
+                boolean bonding  = (bondState == android.bluetooth.BluetoothDevice.BOND_BONDING);
+
+                Log.i(TAG, "[BLE] → CAMINHO 2: GATT conectado, estado=" + mBluetoothService.getBleState().name()
+                        + " | bondState=" + bondState
+                        + " | jaBonded=" + jaBonded
+                        + " | bonding=" + bonding);
 
                 if (jaBonded) {
-                    Log.i(TAG, "[BLE] BluetoothService vinculado — GATT conectado + BOND_BONDED."
-                            + " Forçando READY e enviando $ML.");
+                    Log.i(TAG, "[BLE] → CAMINHO 2A: BOND_BONDED → forceReady() → $ML");
                     atualizarStatus("✓ Dispositivo autenticado. Liberando...");
-                    mBluetoothService.forceReady(); // transita para READY e emite ACTION_WRITE_READY
-                } else {
-                    Log.i(TAG, "[BLE] BluetoothService vinculado — GATT conectado, sem bond. Aguardando AUTH:OK...");
+                    mBluetoothService.forceReady();
+                } else if (bonding) {
+                    Log.i(TAG, "[BLE] → CAMINHO 2B: BOND_BONDING em andamento. Aguardando AUTH:OK + fallback.");
                     atualizarStatus("⏳ Autenticando dispositivo...");
-                    // ACTION_WRITE_READY chegará quando AUTH:OK for recebido.
+                } else {
+                    Log.i(TAG, "[BLE] → CAMINHO 2C: BOND_NONE. Aguardando AUTH:OK + fallback do BluetoothService.");
+                    atualizarStatus("⏳ Autenticando dispositivo...");
                 }
 
             } else {
-                // Sem conexão: inicia scan/conexão.
-                Log.i(TAG, "[BLE] BluetoothService vinculado — iniciando conexão BLE...");
+                Log.i(TAG, "[BLE] → CAMINHO 3: sem GATT. Iniciando scan/conexão.");
                 atualizarStatus("⏳ Conectando ao dispositivo...");
                 mBluetoothService.scanLeDevice(true);
             }
