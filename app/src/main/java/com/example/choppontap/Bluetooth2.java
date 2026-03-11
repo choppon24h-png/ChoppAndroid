@@ -135,7 +135,7 @@ public class Bluetooth2 extends BleManager {
         BluetoothManager bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         List<BluetoothDevice> devices = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT);
         for(BluetoothDevice device : devices){
-            if(bluetoothGatt == null && device.getAlias() != null && device.getAlias().equals("CHOPPE")){
+            if(bluetoothGatt == null && device.getName() != null && device.getName().startsWith("CHOPP_")){
                 bluetoothGatt = device.connectGatt(context, true, gattCallback);
 
             }
@@ -575,7 +575,8 @@ public class Bluetooth2 extends BleManager {
                     // for ActivityCompat#requestPermissions for more details.
                     return;
                 }
-                if(device.getAlias() == null || (device.getAlias() != null && !device.getAlias().equals("CHOPPE")))
+                // Aceita apenas dispositivos com prefixo CHOPP_ (ex: CHOPP_E123, CHOPP_F45A)
+                if(device.getName() == null || !device.getName().startsWith("CHOPP_"))
                 {
                     return;
                 }

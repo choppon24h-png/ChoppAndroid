@@ -287,9 +287,14 @@ public class BluetoothService extends Service {
             }
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.i(TAG, "[BLE] GATT conectado | bondState="
-                        + bondStateName(gatt.getDevice().getBondState())
+                String mac = gatt.getDevice().getAddress();
+                Log.i(TAG, "[BLE] GATT conectado | MAC=" + mac
+                        + " | bondState=" + bondStateName(gatt.getDevice().getBondState())
                         + " — solicitando MTU 512");
+                // Salva o MAC do ESP32 conectado para uso no ServiceTools e reconexão
+                getSharedPreferences("tap_config", Context.MODE_PRIVATE)
+                        .edit().putString("esp32_mac", mac).apply();
+                mTargetMac = mac;
                 transitionTo(BleState.CONNECTED);
                 broadcastConnectionStatus("connected");
                 gatt.requestMtu(512);
@@ -346,8 +351,18 @@ public class BluetoothService extends Service {
             Log.i(TAG, "[BLE] NUS OK | RX=" + (mWriteCharacteristic != null ? "OK" : "NULL")
                     + " | TX=" + (txChar != null ? "OK" : "NULL"));
 
-            // Neste ponto o bond JÁ DEVE EXISTIR (criamos antes de connectGatt).
-            // Se por algum motivo não existe, aguardar AUTH:OK com timeout de segurança.
+            // Envia comando de autenticação por PIN ao ESP32 após serviços descobertos.
+            // O ESP32 responderá com AUTH:OK se o PIN for correto, liberando o estado READY.
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (mWriteCharacteristic != null && mBluetoothGatt != null) {
+                    Log.i(TAG, "[BLE] Enviando $AUTH:" + ESP32_PIN + " para autenticação...");
+                    mWriteCharacteristic.setValue(("$AUTH:" + ESP32_PIN).getBytes());
+                    boolean ok = mBluetoothGatt.writeCharacteristic(mWriteCharacteristic);
+                    Log.i(TAG, "[BLE] $AUTH enviado → " + (ok ? "OK" : "FALHOU"));
+                }
+            }, 600);
+
+            // Inicia timeout aguardando AUTH:OK do ESP32
             if (bondState == BluetoothDevice.BOND_BONDED) {
                 Log.i(TAG, "[BLE] BOND_BONDED confirmado em onServicesDiscovered."
                         + " Aguardando AUTH:OK do ESP32 (timeout " + AUTH_OK_TIMEOUT_MS / 1000 + "s)...");
