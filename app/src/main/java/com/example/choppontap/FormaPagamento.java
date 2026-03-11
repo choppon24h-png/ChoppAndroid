@@ -348,6 +348,15 @@ public class FormaPagamento extends AppCompatActivity {
             Intent it = new Intent(this, PagamentoConcluido.class);
             it.putExtra("qtd_ml",     quantidade);
             it.putExtra("checkout_id", checkout_id);
+            // FIX-4: repassar URL da imagem recebida do Home para PagamentoConcluido
+            Bundle extras = getIntent().getExtras();
+            if (extras != null && extras.containsKey("imagem_url")) {
+                String imgUrl = extras.getString("imagem_url");
+                if (imgUrl != null && !imgUrl.isEmpty()) {
+                    it.putExtra("imagem_url", imgUrl);
+                    Log.i(TAG, "[PAYMENT] Repassando imagem_url para PagamentoConcluido: " + imgUrl);
+                }
+            }
             Log.i(TAG, "[PAYMENT] Navegando para PagamentoConcluido com qtd_ml=" + quantidade);
             startActivity(it);
             finish();

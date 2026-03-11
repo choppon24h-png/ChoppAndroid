@@ -690,7 +690,11 @@ public class Home extends AppCompatActivity {
             it.putExtra("quantidade", volumeMl);
             it.putExtra("valor", valor);
             it.putExtra("descricao", bebida + " " + volumeMl + "ml");
-            Log.i(TAG, "Abrindo pagamento: " + volumeMl + "ml R$" + valor);
+            // FIX-4: passar URL da imagem para que PagamentoConcluido possa carregar
+            if (imagemUrl != null && !imagemUrl.isEmpty()) {
+                it.putExtra("imagem_url", imagemUrl);
+            }
+            Log.i(TAG, "Abrindo pagamento: " + volumeMl + "ml R$" + valor + " imagemUrl=" + imagemUrl);
             startActivity(it);
         } else {
             Toast.makeText(this, "Aguardando conexão Bluetooth...", Toast.LENGTH_SHORT).show();
