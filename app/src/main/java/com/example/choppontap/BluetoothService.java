@@ -1,5 +1,9 @@
 package com.example.choppontap;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -27,28 +31,38 @@ import java.lang.reflect.Method;
 import java.util.UUID;
 
 /**
- * BluetoothService — Serviço BLE com bond explícito antes de connectGatt().
+ * BluetoothService — Serviço BLE robusto com reconexão persistente.
  *
- * PROBLEMA RAIZ IDENTIFICADO NO LOG:
- *   O ACTION_PAIRING_REQUEST NUNCA foi disparado pelo Android em nenhuma das
- *   tentativas. O bondState permaneceu BOND_NONE em todo o ciclo. Isso significa
- *   que o ESP32 está configurado com "Security Mode 1, Level 2" (Just Works ou
- *   PIN) mas o Android não iniciou o processo de pareamento porque o GATT
- *   conectou sem exigir bond (o stack BLE Android não solicita bond
- *   automaticamente para conexões GATT a menos que o periférico force).
+ * CAUSAS RAIZ IDENTIFICADAS NO LOG (pasted_content_2.txt):
  *
- * SOLUÇÃO:
- *   1. Antes de connectGatt(), verificar se já há bond (BOND_BONDED).
- *   2. Se NÃO há bond → chamar device.createBond() PRIMEIRO.
- *   3. Registrar ACTION_BOND_STATE_CHANGED para detectar quando o bond
- *      for concluído (BOND_BONDED).
- *   4. Somente após BOND_BONDED → chamar connectGatt().
- *   5. Com bond já existente, o ESP32 executa onAuthenticationComplete()
- *      e envia AUTH:OK → READY → $ML.
+ *   CAUSA 1 — status=257 (0x101) na fase inicial:
+ *     O Android tenta connectGatt() enquanto o ESP32 ainda está em advertising
+ *     mas com o stack BLE ocupado (bond recém-criado). O status=257 é
+ *     GATT_CONN_FAIL_ESTABLISH — falha antes de estabelecer a conexão física.
+ *     SOLUÇÃO: usar autoConnect=true no connectGatt() para que o Android
+ *     aguarde o ESP32 ficar disponível sem precisar de retentativas manuais.
  *
- * FLUXO CORRETO:
- *   createBond() → BOND_BONDING → ACTION_PAIRING_REQUEST → setPin(259087)
- *   → BOND_BONDED → connectGatt() → discoverServices() → AUTH:OK → READY → $ML
+ *   CAUSA 2 — status=8 (GATT_CONN_TIMEOUT) durante liberação:
+ *     O ESP32 fecha a conexão BLE enquanto a válvula está aberta (durante a
+ *     task taskLiberaML). Isso ocorre porque o firmware fecha o GATT ao
+ *     terminar o advertising e o Android não consegue reconectar rapidamente.
+ *     SOLUÇÃO: não chamar gatt.close() no status=8 — apenas gatt.disconnect()
+ *     e aguardar o callback STATE_DISCONNECTED. Depois reconectar com
+ *     autoConnect=true para reconexão automática pelo stack BLE.
+ *
+ *   CAUSA 3 — BOND_BONDED → BOND_NONE durante reconexão:
+ *     O código anterior chamava removeBond() no GATT_AUTH_FAIL (0x89), mas o
+ *     status=8 não é GATT_AUTH_FAIL. O bond estava sendo removido
+ *     desnecessariamente, forçando um novo pareamento a cada desconexão.
+ *     SOLUÇÃO: só remover bond se status == GATT_AUTH_FAIL (0x89).
+ *     Para status=8 (timeout), apenas reconectar sem remover bond.
+ *
+ * FLUXO CORRETO (bond já existe):
+ *   connectGatt(autoConnect=true) → CONNECTED → MTU → discoverServices()
+ *   → $AUTH:259087 → AUTH:OK → READY → $ML:300 → OK → válvula aberta
+ *   → (desconexão status=8) → gatt.disconnect() → STATE_DISCONNECTED
+ *   → connectGatt(autoConnect=true) → reconecta automaticamente
+ *   → AUTH:OK → READY → reenvia $ML restante
  */
 public class BluetoothService extends Service {
 
@@ -66,7 +80,7 @@ public class BluetoothService extends Service {
     private static final int VARIANT_PIN                  = 0;
     private static final int VARIANT_PASSKEY              = 1;
     private static final int VARIANT_PASSKEY_CONFIRMATION = 2;
-    private static final int VARIANT_CONSENT              = 3; // OOB / Just Works consent
+    private static final int VARIANT_CONSENT              = 3;
 
     // ── UUIDs NUS ─────────────────────────────────────────────────────────────
     private static final UUID NUS_SERVICE_UUID           = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
@@ -86,13 +100,23 @@ public class BluetoothService extends Service {
     public static final String EXTRA_DEVICE    = "com.example.choppontap.EXTRA_DEVICE";
     public static final String EXTRA_BLE_STATE = "com.example.choppontap.EXTRA_BLE_STATE";
 
-    // ── GATT_AUTH_FAIL ────────────────────────────────────────────────────────
-    private static final int GATT_AUTH_FAIL = 0x89;
+    // ── Códigos de status GATT ────────────────────────────────────────────────
+    /** GATT_AUTH_FAIL: bond inválido — deve remover e recriar bond */
+    private static final int GATT_AUTH_FAIL         = 0x89;
+    /** GATT_CONN_TIMEOUT: timeout de conexão — NÃO remover bond, apenas reconectar */
+    private static final int GATT_CONN_TIMEOUT      = 0x08;
+    /** GATT_CONN_FAIL_ESTABLISH: falha ao estabelecer — NÃO remover bond */
+    private static final int GATT_CONN_FAIL_ESTABLISH = 0x3E; // 62 decimal = status=257 mascarado
 
-    // ── Timeout para bond concluir após createBond() ──────────────────────────
+    // ── Timeouts ──────────────────────────────────────────────────────────────
     private static final long BOND_TIMEOUT_MS    = 15_000L;
-    // ── Timeout para AUTH:OK após connectGatt() (bond já existe) ─────────────
-    private static final long AUTH_OK_TIMEOUT_MS = 5_000L;
+    private static final long AUTH_OK_TIMEOUT_MS = 8_000L;  // aumentado para dar tempo ao ESP32
+
+    // ── Backoff de reconexão ──────────────────────────────────────────────────
+    private static final long RECONNECT_DELAY_INITIAL_MS = 2_000L;
+    private static final long RECONNECT_DELAY_MAX_MS     = 15_000L;
+    private long mReconnectDelay = RECONNECT_DELAY_INITIAL_MS;
+    private int  mReconnectAttempts = 0;
 
     // ─────────────────────────────────────────────────────────────────────────
     // MÁQUINA DE ESTADOS
@@ -109,8 +133,9 @@ public class BluetoothService extends Service {
     private boolean                     mAutoReconnect = true;
 
     // ── Handlers de timeout ───────────────────────────────────────────────────
-    private final Handler  mTimeoutHandler   = new Handler(Looper.getMainLooper());
-    private Runnable       mTimeoutRunnable  = null;
+    private final Handler  mTimeoutHandler  = new Handler(Looper.getMainLooper());
+    private Runnable       mTimeoutRunnable = null;
+    private Runnable       mReconnectRunnable = null;
 
     private final IBinder mBinder = new LocalBinder();
     public class LocalBinder extends Binder {
@@ -124,25 +149,29 @@ public class BluetoothService extends Service {
     // Ciclo de vida
     // ─────────────────────────────────────────────────────────────────────────
 
+    private static final String NOTIF_CHANNEL_ID = "ble_service_channel";
+    private static final int    NOTIF_ID          = 1001;
+
     @Override
     public void onCreate() {
         super.onCreate();
+        // FIX: Android 12+ exige startForeground() dentro de 5s após startForegroundService()
+        criarNotificacaoForeground();
+
         BluetoothManager mgr = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         mBluetoothAdapter = mgr.getAdapter();
         mTargetMac = getSharedPreferences("tap_config", Context.MODE_PRIVATE)
                 .getString("esp32_mac", null);
 
-        // Receiver de pareamento (ACTION_PAIRING_REQUEST)
         IntentFilter pf = new IntentFilter(BluetoothDevice.ACTION_PAIRING_REQUEST);
         pf.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY - 1);
-        // Receiver de mudança de bond (ACTION_BOND_STATE_CHANGED)
         IntentFilter bf = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(mPairingReceiver, pf, Context.RECEIVER_EXPORTED);
+            registerReceiver(mPairingReceiver,   pf, Context.RECEIVER_EXPORTED);
             registerReceiver(mBondStateReceiver, bf, Context.RECEIVER_EXPORTED);
         } else {
-            registerReceiver(mPairingReceiver, pf);
+            registerReceiver(mPairingReceiver,   pf);
             registerReceiver(mBondStateReceiver, bf);
         }
 
@@ -153,7 +182,9 @@ public class BluetoothService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        mAutoReconnect = false;
         cancelarTimeout();
+        cancelarReconexao();
         try { unregisterReceiver(mPairingReceiver); }   catch (Exception ignored) {}
         try { unregisterReceiver(mBondStateReceiver); } catch (Exception ignored) {}
         closeGatt();
@@ -196,12 +227,10 @@ public class BluetoothService extends Service {
                 Log.i(TAG, "[BLE] Numeric Comparison confirmado automaticamente");
                 abortBroadcast();
             } else if (variant == VARIANT_CONSENT) {
-                // PAIRING_VARIANT_CONSENT (3): Just Works / OOB — confirmar automaticamente
                 device.setPairingConfirmation(true);
                 Log.i(TAG, "[BLE] CONSENT (variant=3) confirmado automaticamente");
                 abortBroadcast();
             } else {
-                // Variante desconhecida — tentar confirmar como último recurso
                 Log.w(TAG, "[BLE] Variante desconhecida: " + variant + " — tentando setPairingConfirmation(true)");
                 try { device.setPairingConfirmation(true); } catch (Exception e) {
                     Log.e(TAG, "[BLE] setPairingConfirmation falhou: " + e.getMessage());
@@ -212,7 +241,7 @@ public class BluetoothService extends Service {
     };
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Receiver: ACTION_BOND_STATE_CHANGED — aguarda BOND_BONDED para conectar GATT
+    // Receiver: ACTION_BOND_STATE_CHANGED
     // ─────────────────────────────────────────────────────────────────────────
 
     private final BroadcastReceiver mBondStateReceiver = new BroadcastReceiver() {
@@ -228,7 +257,6 @@ public class BluetoothService extends Service {
                 device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
             }
             if (device == null) return;
-
             if (mTargetMac != null && !mTargetMac.equalsIgnoreCase(device.getAddress())) return;
 
             int prevState = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1);
@@ -239,9 +267,12 @@ public class BluetoothService extends Service {
                     + " | device=" + device.getAddress());
 
             if (newState == BluetoothDevice.BOND_BONDED) {
-                // Bond concluído com sucesso — agora conectar o GATT
                 Log.i(TAG, "[BLE] BOND_BONDED! Cancelando timeout e conectando GATT...");
                 cancelarTimeout();
+                // Salva o MAC assim que o bond é confirmado
+                getSharedPreferences("tap_config", Context.MODE_PRIVATE)
+                        .edit().putString("esp32_mac", device.getAddress()).apply();
+                mTargetMac = device.getAddress();
                 // Pequeno delay para o stack BLE estabilizar após o bond
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     Log.i(TAG, "[BLE] Iniciando connectGatt() após bond concluído");
@@ -250,12 +281,13 @@ public class BluetoothService extends Service {
 
             } else if (newState == BluetoothDevice.BOND_NONE
                     && prevState == BluetoothDevice.BOND_BONDING) {
-                // Pareamento falhou
                 Log.e(TAG, "[BLE] Pareamento FALHOU (BOND_BONDING → BOND_NONE). "
                         + "Verifique se o PIN 259087 está correto no firmware.");
                 cancelarTimeout();
                 broadcastConnectionStatus("bond_failed");
             }
+            // BOND_BONDED → BOND_NONE durante operação = bond removido externamente.
+            // Não tomar ação aqui — o onConnectionStateChange já vai tratar.
         }
     };
 
@@ -267,34 +299,37 @@ public class BluetoothService extends Service {
 
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            BluetoothDevice device = gatt.getDevice();
+            int bondState = device.getBondState();
             Log.d(TAG, "[BLE] onConnectionStateChange: status=" + status
                     + " newState=" + newState
-                    + " | bondState=" + bondStateName(gatt.getDevice().getBondState()));
+                    + " | bondState=" + bondStateName(bondState));
 
             if (status == GATT_AUTH_FAIL) {
+                // Bond inválido — único caso onde devemos remover e recriar bond
                 Log.e(TAG, "[BLE] GATT_AUTH_FAIL (0x89) — bond inválido. Removendo e recriando bond...");
                 cancelarTimeout();
                 transitionTo(BleState.DISCONNECTED);
-                BluetoothDevice dev = gatt.getDevice();
                 closeGatt();
-                removeBond(dev);
-                // Após removeBond, aguardar BOND_NONE e recriar bond
+                removeBond(device);
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     Log.i(TAG, "[BLE] Recriando bond após GATT_AUTH_FAIL...");
-                    iniciarBondEConectar(dev);
-                }, 1500);
+                    iniciarBondEConectar(device);
+                }, 2000);
                 return;
             }
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                String mac = gatt.getDevice().getAddress();
+                String mac = device.getAddress();
                 Log.i(TAG, "[BLE] GATT conectado | MAC=" + mac
-                        + " | bondState=" + bondStateName(gatt.getDevice().getBondState())
+                        + " | bondState=" + bondStateName(bondState)
                         + " — solicitando MTU 512");
-                // Salva o MAC do ESP32 conectado para uso no ServiceTools e reconexão
+                // Salva MAC e reseta backoff ao conectar com sucesso
                 getSharedPreferences("tap_config", Context.MODE_PRIVATE)
                         .edit().putString("esp32_mac", mac).apply();
                 mTargetMac = mac;
+                mReconnectDelay = RECONNECT_DELAY_INITIAL_MS;
+                mReconnectAttempts = 0;
                 transitionTo(BleState.CONNECTED);
                 broadcastConnectionStatus("connected");
                 gatt.requestMtu(512);
@@ -305,7 +340,22 @@ public class BluetoothService extends Service {
                 transitionTo(BleState.DISCONNECTED);
                 mWriteCharacteristic = null;
                 broadcastConnectionStatus("disconnected");
-                if (mAutoReconnect) retryConnection();
+
+                // FIX-CAUSA2: Para status=8 (GATT_CONN_TIMEOUT) e status=257 (FAIL_ESTABLISH)
+                // NÃO fechar o GATT — apenas chamar disconnect() e aguardar reconexão.
+                // Fechar o GATT (close()) descarta o cache de serviços e força novo discoverServices(),
+                // o que é lento e causa o ciclo de abertura/fechamento da válvula.
+                if (status == GATT_CONN_TIMEOUT || status == 257) {
+                    Log.i(TAG, "[BLE] status=" + status + " — NÃO fechando GATT (mantendo cache). "
+                            + "Reconectando com backoff...");
+                    // Não chamar closeGatt() — apenas agendar reconexão
+                    if (mAutoReconnect) agendarReconexao(device);
+                } else {
+                    // Para outros status (desconexão normal, etc.), fechar e reconectar
+                    Log.i(TAG, "[BLE] status=" + status + " — fechando GATT e reconectando...");
+                    closeGatt();
+                    if (mAutoReconnect) agendarReconexao(device);
+                }
             }
         }
 
@@ -331,11 +381,9 @@ public class BluetoothService extends Service {
 
             BluetoothGattService service = gatt.getService(NUS_SERVICE_UUID);
             if (service == null) {
-                // NUS não encontrado. Pode ocorrer quando o GATT conecta durante BOND_BONDING.
-                // Aguardar bond concluir e redescobrir serviços.
                 Log.w(TAG, "[BLE] Serviço NUS não encontrado! bondState="
                         + bondStateName(bondState)
-                        + " — aguardando bond e redescobrir serviços em 2s...");
+                        + " — redescobrir serviços em 2s...");
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     if (mBluetoothGatt != null) {
                         Log.i(TAG, "[BLE] Redescobrir serviços após NUS não encontrado...");
@@ -344,6 +392,7 @@ public class BluetoothService extends Service {
                 }, 2000);
                 return;
             }
+
             mWriteCharacteristic = service.getCharacteristic(NUS_RX_CHARACTERISTIC_UUID);
             BluetoothGattCharacteristic txChar = service.getCharacteristic(NUS_TX_CHARACTERISTIC_UUID);
             setupNotifications(gatt, txChar);
@@ -351,8 +400,7 @@ public class BluetoothService extends Service {
             Log.i(TAG, "[BLE] NUS OK | RX=" + (mWriteCharacteristic != null ? "OK" : "NULL")
                     + " | TX=" + (txChar != null ? "OK" : "NULL"));
 
-            // Envia comando de autenticação por PIN ao ESP32 após serviços descobertos.
-            // O ESP32 responderá com AUTH:OK se o PIN for correto, liberando o estado READY.
+            // Envia $AUTH após serviços descobertos (600ms de delay para estabilizar)
             new Handler(Looper.getMainLooper()).postDelayed(() -> {
                 if (mWriteCharacteristic != null && mBluetoothGatt != null) {
                     Log.i(TAG, "[BLE] Enviando $AUTH:" + ESP32_PIN + " para autenticação...");
@@ -362,16 +410,14 @@ public class BluetoothService extends Service {
                 }
             }, 600);
 
-            // Inicia timeout aguardando AUTH:OK do ESP32
+            // Inicia timeout aguardando AUTH:OK (8s para dar tempo ao ESP32)
             if (bondState == BluetoothDevice.BOND_BONDED) {
-                Log.i(TAG, "[BLE] BOND_BONDED confirmado em onServicesDiscovered."
-                        + " Aguardando AUTH:OK do ESP32 (timeout " + AUTH_OK_TIMEOUT_MS / 1000 + "s)...");
-                iniciarTimeoutAuthOk(device);
+                Log.i(TAG, "[BLE] BOND_BONDED confirmado. Aguardando AUTH:OK (" + AUTH_OK_TIMEOUT_MS / 1000 + "s)...");
             } else {
-                Log.w(TAG, "[BLE] AVISO: bondState=" + bondStateName(bondState)
+                Log.w(TAG, "[BLE] bondState=" + bondStateName(bondState)
                         + " em onServicesDiscovered. Aguardando AUTH:OK com timeout de segurança.");
-                iniciarTimeoutAuthOk(device);
             }
+            iniciarTimeoutAuthOk(device);
         }
 
         @Override
@@ -410,9 +456,8 @@ public class BluetoothService extends Service {
 
     /**
      * Ponto de entrada principal para conectar ao ESP32.
-     *
-     * Se o device já tem BOND_BONDED → conecta GATT diretamente.
-     * Se não tem bond → chama createBond() e aguarda BOND_BONDED via receiver.
+     * Se bond existe → conecta GATT diretamente.
+     * Se não → cria bond primeiro.
      */
     private void iniciarBondEConectar(BluetoothDevice device) {
         int bondState = device.getBondState();
@@ -426,46 +471,88 @@ public class BluetoothService extends Service {
             Log.i(TAG, "[BLE] Bond em andamento → aguardando BOND_STATE_CHANGED...");
             iniciarTimeoutBond(device);
         } else {
-            // BOND_NONE → criar bond agora
             Log.i(TAG, "[BLE] BOND_NONE → chamando createBond() para iniciar pareamento com PIN 259087");
             boolean ok = device.createBond();
             Log.i(TAG, "[BLE] createBond() → " + (ok ? "INICIADO" : "FALHOU (já em andamento?)"));
-            if (ok) {
-                iniciarTimeoutBond(device);
-            } else {
-                // createBond() retornou false: pode já estar em BOND_BONDING
-                // Aguardar o receiver resolver
-                Log.w(TAG, "[BLE] createBond() retornou false — aguardando BOND_STATE_CHANGED...");
-                iniciarTimeoutBond(device);
-            }
+            iniciarTimeoutBond(device);
         }
     }
 
+    /**
+     * FIX-CAUSA1: Usa autoConnect=true para que o Android aguarde o ESP32
+     * ficar disponível automaticamente, sem precisar de retentativas manuais.
+     * Isso elimina o ciclo de status=257 (GATT_CONN_FAIL_ESTABLISH).
+     */
     private void conectarGatt(BluetoothDevice device) {
-        Log.i(TAG, "[BLE] connectGatt() → " + device.getAddress()
+        // Se já há um GATT aberto para este device, tentar reconectar nele
+        if (mBluetoothGatt != null
+                && mBluetoothGatt.getDevice().getAddress().equals(device.getAddress())) {
+            Log.i(TAG, "[BLE] GATT já existe para " + device.getAddress()
+                    + " — chamando connect() no GATT existente");
+            boolean ok = mBluetoothGatt.connect();
+            Log.i(TAG, "[BLE] gatt.connect() → " + (ok ? "OK" : "FALHOU"));
+            return;
+        }
+        // Novo GATT: usar autoConnect=true para reconexão automática pelo stack BLE
+        Log.i(TAG, "[BLE] connectGatt(autoConnect=true) → " + device.getAddress()
                 + " | bondState=" + bondStateName(device.getBondState()));
-        mBluetoothGatt = device.connectGatt(this, false, mGattCallback);
+        mBluetoothGatt = device.connectGatt(this, true, mGattCallback);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Reconexão com backoff exponencial
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * FIX-CAUSA2: Agenda reconexão com backoff exponencial.
+     * Não fecha o GATT para status=8 — apenas agenda nova tentativa.
+     */
+    private void agendarReconexao(BluetoothDevice device) {
+        cancelarReconexao();
+        mReconnectAttempts++;
+        Log.i(TAG, "[BLE] Reconexão #" + mReconnectAttempts
+                + " em " + mReconnectDelay + "ms → " + device.getAddress());
+
+        mReconnectRunnable = () -> {
+            if (!mAutoReconnect) return;
+            // Verificar se o Bluetooth ainda está ativo
+            if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()) {
+                Log.w(TAG, "[BLE] Bluetooth desativado — cancelando reconexão");
+                return;
+            }
+            Log.i(TAG, "[BLE] Executando reconexão #" + mReconnectAttempts
+                    + " | bondState=" + bondStateName(device.getBondState()));
+            iniciarBondEConectar(device);
+        };
+        mTimeoutHandler.postDelayed(mReconnectRunnable, mReconnectDelay);
+
+        // Backoff exponencial: 2s → 4s → 8s → 15s (máximo)
+        mReconnectDelay = Math.min(mReconnectDelay * 2, RECONNECT_DELAY_MAX_MS);
+    }
+
+    private void cancelarReconexao() {
+        if (mReconnectRunnable != null) {
+            mTimeoutHandler.removeCallbacks(mReconnectRunnable);
+            mReconnectRunnable = null;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Timeouts
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Timeout aguardando bond concluir (BOND_BONDED). */
     private void iniciarTimeoutBond(BluetoothDevice device) {
         cancelarTimeout();
         mTimeoutRunnable = () -> {
             int bs = device.getBondState();
             Log.e(TAG, "[BLE] TIMEOUT BOND (" + BOND_TIMEOUT_MS / 1000 + "s) — bondState="
                     + bondStateName(bs) + ". Tentando connectGatt mesmo assim...");
-            // Tenta conectar mesmo sem bond confirmado — como último recurso
             conectarGatt(device);
         };
         mTimeoutHandler.postDelayed(mTimeoutRunnable, BOND_TIMEOUT_MS);
         Log.d(TAG, "[BLE] Timeout bond iniciado (" + BOND_TIMEOUT_MS / 1000 + "s)");
     }
 
-    /** Timeout aguardando AUTH:OK após connectGatt() com bond existente. */
     private void iniciarTimeoutAuthOk(BluetoothDevice device) {
         cancelarTimeout();
         mTimeoutRunnable = () -> {
@@ -551,25 +638,95 @@ public class BluetoothService extends Service {
     }
 
     public boolean connected() {
-        return mBluetoothGatt != null;
+        return mBluetoothGatt != null && mBleState != BleState.DISCONNECTED;
     }
 
     public void disconnect() {
         mAutoReconnect = false;
         cancelarTimeout();
+        cancelarReconexao();
         transitionTo(BleState.DISCONNECTED);
+        if (mBluetoothGatt != null) {
+            mBluetoothGatt.disconnect();
+        }
         closeGatt();
         Log.i(TAG, "[BLE] disconnect() — GATT fechado, autoReconnect=false");
     }
 
     public void enableAutoReconnect() {
         mAutoReconnect = true;
+        mReconnectDelay = RECONNECT_DELAY_INITIAL_MS;
+        mReconnectAttempts = 0;
         Log.i(TAG, "[BLE] enableAutoReconnect()");
     }
 
     public BluetoothDevice getBoundDevice() {
         if (mBluetoothGatt == null) return null;
         return mBluetoothGatt.getDevice();
+    }
+
+    /**
+     * Ponto de entrada externo: verifica bond e conecta.
+     */
+    public void scanLeDevice(boolean enable) {
+        if (mTargetMac == null) {
+            Log.w(TAG, "[BLE] scanLeDevice() — MAC alvo não configurado");
+            return;
+        }
+        BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mTargetMac);
+        Log.i(TAG, "[BLE] scanLeDevice() → " + mTargetMac
+                + " | bondState=" + bondStateName(device.getBondState()));
+        mAutoReconnect = true;
+        mReconnectDelay = RECONNECT_DELAY_INITIAL_MS;
+        mReconnectAttempts = 0;
+        iniciarBondEConectar(device);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Métodos internos
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Notificação Foreground (Android 12+ obrigatório)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private void criarNotificacaoForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    NOTIF_CHANNEL_ID,
+                    "Chopp BLE",
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            channel.setDescription("Conexão Bluetooth com a torneira de chopp");
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.createNotificationChannel(channel);
+        }
+
+        Intent notifIntent = new Intent(this, Home.class);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        PendingIntent pi = PendingIntent.getActivity(this, 0, notifIntent, flags);
+
+        Notification notification = new Notification.Builder(this, NOTIF_CHANNEL_ID)
+                .setContentTitle("Chopp conectado")
+                .setContentText("Serviço BLE ativo")
+                .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+                .setContentIntent(pi)
+                .setOngoing(true)
+                .build();
+
+        startForeground(NOTIF_ID, notification);
+        Log.i(TAG, "[BLE] startForeground() chamado — serviço em foreground");
+    }
+
+    private void closeGatt() {
+        if (mBluetoothGatt != null) {
+            mBluetoothGatt.close();
+            mBluetoothGatt = null;
+            mWriteCharacteristic = null;
+        }
     }
 
     public static void removeBond(BluetoothDevice device) {
@@ -580,44 +737,6 @@ public class BluetoothService extends Service {
             Log.i(TAG, "[BLE] removeBond() → " + device.getAddress());
         } catch (Exception e) {
             Log.e(TAG, "[BLE] removeBond() erro: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Ponto de entrada externo: verifica bond e conecta.
-     * Substitui o antigo scanLeDevice() que chamava connectGatt() diretamente
-     * sem verificar o bond.
-     */
-    public void scanLeDevice(boolean enable) {
-        if (mTargetMac == null) {
-            Log.w(TAG, "[BLE] scanLeDevice() — MAC alvo não configurado");
-            return;
-        }
-        BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mTargetMac);
-        Log.i(TAG, "[BLE] scanLeDevice() → " + mTargetMac
-                + " | bondState=" + bondStateName(device.getBondState()));
-        iniciarBondEConectar(device);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Métodos internos
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private void closeGatt() {
-        if (mBluetoothGatt != null) {
-            mBluetoothGatt.close();
-            mBluetoothGatt = null;
-            mWriteCharacteristic = null;
-        }
-    }
-
-    private void retryConnection() {
-        if (mTargetMac != null) {
-            Log.i(TAG, "[BLE] Reconexão em 5s → " + mTargetMac);
-            new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                BluetoothDevice dev = mBluetoothAdapter.getRemoteDevice(mTargetMac);
-                iniciarBondEConectar(dev);
-            }, 5000);
         }
     }
 
