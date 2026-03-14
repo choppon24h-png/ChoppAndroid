@@ -305,6 +305,25 @@ public class BluetoothService extends Service {
                     + " newState=" + newState
                     + " | bondState=" + bondStateName(bondState));
 
+            // ─────────────────────────────────────────────────────────────
+            // FIX DEFINITIVO STATUS=8 (Connection Supervision Timeout):
+            //
+            // O status=8 ocorre porque o Android usa por padrão o
+            // CONNECTION_PRIORITY_BALANCED (interval=45ms, timeout=720ms).
+            // Com esse intervalo, se o ESP32 perder 8 connection events
+            // consecutivos (8 × 45ms = 360ms), o Android declara timeout.
+            //
+            // Durante a dispensação, o ESP32 está ocupado na taskLiberaML
+            // (loop while com vTaskDelay(50ms)) e pode perder connection events.
+            //
+            // SOLUÇÃO: requestConnectionPriority(HIGH) logo após conectar:
+            //   - Connection interval: 7.5ms ~ 15ms
+            //   - Supervision timeout: 5000ms
+            //   - Slave latency: 0
+            //
+            // Isso garante que o Android tente reconectar muito mais rápido
+            // e o ESP32 tenha muito mais tempo antes de ser declarado perdido.
+            // ─────────────────────────────────────────────────────────────
             if (status == GATT_AUTH_FAIL) {
                 // Bond inválido — único caso onde devemos remover e recriar bond
                 Log.e(TAG, "[BLE] GATT_AUTH_FAIL (0x89) — bond inválido. Removendo e recriando bond...");
@@ -332,6 +351,10 @@ public class BluetoothService extends Service {
                 mReconnectAttempts = 0;
                 transitionTo(BleState.CONNECTED);
                 broadcastConnectionStatus("connected");
+                // FIX STATUS=8: forçar CONNECTION_PRIORITY_HIGH imediatamente
+                // para reduzir o connection interval e aumentar o supervision timeout
+                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
+                Log.i(TAG, "[BLE] requestConnectionPriority(HIGH) solicitado");
                 gatt.requestMtu(512);
 
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
