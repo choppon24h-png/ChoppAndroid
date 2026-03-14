@@ -251,24 +251,84 @@ public class Imei extends AppCompatActivity {
                 Log.i(TAG, "Response successful: " + response.isSuccessful());
 
                 final String jsonResponse;
+                final int httpCode = response.code();
                 try (ResponseBody responseBody = response.body()) {
-                    if (!response.isSuccessful() || responseBody == null) {
-                        Log.e(TAG, "Resposta da API falhou com código: " + response.code());
-                        if (response.code() == 401) {
-                            Log.e(TAG, "Erro 401: Token inválido");
-                            runOnUiThread(() ->
-                                    showMessage("❌ Erro de autenticação (401).",
-                                            Snackbar.LENGTH_LONG));
+
+                    // ─────────────────────────────────────────────────────────
+                    // CORREÇÃO: O servidor retorna HTTP 404 com corpo JSON
+                    // {"error":"TAP não encontrada"} quando o android_id não
+                    // está cadastrado na base de dados.
+                    //
+                    // Isso NÃO é um erro de rede nem de código — é uma resposta
+                    // semântica da API. O corpo deve ser lido e exibido ao usuário.
+                    //
+                    // Tratamento por código:
+                    //   200 → TAP encontrada → navegar para Home
+                    //   404 → TAP não cadastrada → exibir mensagem clara
+                    //   401 → Token JWT inválido → erro de autenticação
+                    //   outros → erro genérico com retry
+                    // ─────────────────────────────────────────────────────────
+
+                    if (responseBody == null) {
+                        Log.e(TAG, "Corpo da resposta nulo (HTTP " + httpCode + ")");
+                        runOnUiThread(() ->
+                                showMessage("❌ Resposta vazia do servidor (HTTP " + httpCode + ")",
+                                        Snackbar.LENGTH_LONG));
+                        return;
+                    }
+
+                    // Lê o corpo ANTES de verificar isSuccessful() para capturar
+                    // a mensagem de erro do JSON mesmo em respostas 4xx
+                    jsonResponse = responseBody.string();
+                    Log.d(TAG, "Corpo JSON recebido (HTTP " + httpCode + ", " +
+                            jsonResponse.length() + " chars): " + jsonResponse);
+
+                    if (!response.isSuccessful()) {
+                        Log.e(TAG, "Resposta da API não-sucesso: HTTP " + httpCode);
+
+                        if (httpCode == 404) {
+                            // Tenta extrair a mensagem de erro do JSON
+                            String errMsg = "Dispositivo não cadastrado no servidor.";
+                            try {
+                                int braceIdx = jsonResponse.indexOf('{');
+                                String cleanJson = braceIdx >= 0 ? jsonResponse.substring(braceIdx) : jsonResponse;
+                                org.json.JSONObject errJson = new org.json.JSONObject(cleanJson);
+                                if (errJson.has("error")) {
+                                    errMsg = errJson.getString("error");
+                                } else if (errJson.has("message")) {
+                                    errMsg = errJson.getString("message");
+                                }
+                            } catch (Exception ignored) {}
+
+                            final String finalMsg = errMsg;
+                            Log.w(TAG, "HTTP 404 — TAP não encontrada: " + finalMsg);
+                            runOnUiThread(() -> {
+                                updateStatusText("Dispositivo não cadastrado.");
+                                showMessageWithRetry("⚠️ " + finalMsg +
+                                        "\nVerifique se este tablet está vinculado no painel.");
+                            });
+                        } else if (httpCode == 401) {
+                            Log.e(TAG, "HTTP 401 — Token JWT inválido ou expirado");
+                            runOnUiThread(() -> {
+                                updateStatusText("Erro de autenticação.");
+                                showMessage("❌ Erro de autenticação (401). Verifique a chave da API.",
+                                        Snackbar.LENGTH_LONG);
+                            });
                         } else {
-                            runOnUiThread(() ->
-                                    showMessage("❌ Erro HTTP " + response.code(),
-                                            Snackbar.LENGTH_LONG));
+                            Log.e(TAG, "HTTP " + httpCode + " — erro inesperado");
+                            if (retryAttempt < MAX_RETRY_ATTEMPTS) {
+                                long delay = getRetryDelay(retryAttempt);
+                                runOnUiThread(() -> updateStatusText("Retentando em " + (delay/1000) + "s..."));
+                                new Handler(Looper.getMainLooper()).postDelayed(
+                                        Imei.this::sendRequestWithRetry, delay);
+                            } else {
+                                runOnUiThread(() ->
+                                        showMessageWithRetry("❌ Erro HTTP " + httpCode +
+                                                ". Toque em Tentar Novamente."));
+                            }
                         }
                         return;
                     }
-                    jsonResponse = responseBody.string();
-                    Log.d(TAG, "Corpo JSON recebido (" + jsonResponse.length() +
-                            " chars): " + jsonResponse);
                 } catch (IOException e) {
                     Log.e(TAG, "Erro ao ler resposta da API.", e);
                     runOnUiThread(() ->
