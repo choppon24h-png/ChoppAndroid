@@ -333,6 +333,27 @@ public class BluetoothService extends Service {
         }
     };
 
+    // Delay entre tentativas de scan quando nenhum dispositivo CHOPP_ é encontrado
+    private static final long SCAN_RETRY_DELAY_MS = 5_000L; // 5s entre scans
+
+    /**
+     * Inicia scan BLE com retry automático.
+     * Se nenhum dispositivo CHOPP_ for encontrado no SCAN_TIMEOUT_MS,
+     * aguarda SCAN_RETRY_DELAY_MS e tenta novamente — indefinidamente
+     * enquanto mAutoReconnect=true e mTargetMac=null.
+     */
+    private void iniciarScanComRetry() {
+        if (!mAutoReconnect) return;
+        if (mTargetMac != null) {
+            // MAC foi salvo durante o scan (outro thread) — conecta diretamente
+            Log.i(TAG, "[SCAN] MAC disponível durante retry → conectando diretamente");
+            BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mTargetMac);
+            iniciarBondEConectar(device);
+            return;
+        }
+        iniciarScan();
+    }
+
     private void iniciarScan() {
         if (mScanning || mBleScanner == null) return;
         if (!mBluetoothAdapter.isEnabled()) {
@@ -344,13 +365,31 @@ public class BluetoothService extends Service {
         broadcastConnectionStatus("scanning");
         mBleScanner.startScan(mScanCallback);
 
-        // Para o scan após SCAN_TIMEOUT_MS para economizar bateria
+        // Para o scan após SCAN_TIMEOUT_MS e agenda nova tentativa se ainda sem MAC
         mScanStopRunnable = () -> {
             if (mScanning) {
                 Log.w(TAG, "[SCAN] Timeout — nenhum dispositivo CHOPP_ encontrado em "
-                        + SCAN_TIMEOUT_MS / 1000 + "s");
+                        + SCAN_TIMEOUT_MS / 1000 + "s. Reagendando scan em "
+                        + SCAN_RETRY_DELAY_MS / 1000 + "s...");
                 pararScan();
                 broadcastConnectionStatus("scan_timeout");
+
+                // Retry persistente: se ainda sem MAC e autoReconnect ativo,
+                // agenda novo scan após SCAN_RETRY_DELAY_MS
+                if (mAutoReconnect && mTargetMac == null) {
+                    Log.i(TAG, "[SCAN] Agendando nova tentativa de scan em "
+                            + SCAN_RETRY_DELAY_MS / 1000 + "s...");
+                    mMainHandler.postDelayed(() -> {
+                        if (mAutoReconnect && mTargetMac == null) {
+                            Log.i(TAG, "[SCAN] Reiniciando scan por CHOPP_...");
+                            iniciarScanComRetry();
+                        } else if (mAutoReconnect && mTargetMac != null) {
+                            Log.i(TAG, "[SCAN] MAC disponível após retry → conectando");
+                            BluetoothDevice d = mBluetoothAdapter.getRemoteDevice(mTargetMac);
+                            iniciarBondEConectar(d);
+                        }
+                    }, SCAN_RETRY_DELAY_MS);
+                }
             }
         };
         mMainHandler.postDelayed(mScanStopRunnable, SCAN_TIMEOUT_MS);
@@ -739,13 +778,34 @@ public class BluetoothService extends Service {
             return;
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // CORREÇÃO DEFINITIVA — causa raiz do log 2026-03-14 20:38:
+        //
+        // O log mostrava repetidamente:
+        //   [BLE] scanLeDevice() — MAC alvo não configurado
+        //
+        // Isso ocorria porque mTargetMac era null (SharedPreferences vazio na
+        // primeira execução ou após reinstalação do app), e o método retornava
+        // imediatamente com apenas um Warning, sem iniciar o scan.
+        //
+        // O código anterior tinha um Log.w() mas NÃO chamava iniciarScan().
+        // O método simplesmente retornava sem fazer nada, e o app ficava
+        // parado em DESCONECTADO para sempre.
+        //
+        // SOLUÇÃO:
+        //   - Se MAC salvo → conecta diretamente (caminho rápido)
+        //   - Se sem MAC → inicia scan BLE por dispositivos com prefixo CHOPP_
+        //   - Após scan_timeout → reagenda novo scan em SCAN_RETRY_DELAY_MS
+        //     (loop persistente até encontrar o dispositivo)
+        // ─────────────────────────────────────────────────────────────────────
+
         if (mTargetMac != null) {
             Log.i(TAG, "[BLE] scanLeDevice() — MAC salvo: " + mTargetMac + " → conectando diretamente");
             BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mTargetMac);
             iniciarBondEConectar(device);
         } else {
-            Log.i(TAG, "[BLE] scanLeDevice() — sem MAC salvo → iniciando scan por CHOPP_");
-            iniciarScan();
+            Log.i(TAG, "[BLE] scanLeDevice() — MAC não configurado → iniciando scan por CHOPP_...");
+            iniciarScanComRetry();
         }
     }
 
