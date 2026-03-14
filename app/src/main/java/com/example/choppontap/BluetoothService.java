@@ -717,7 +717,14 @@ public class BluetoothService extends Service {
                 .setOngoing(true)
                 .build();
 
-        startForeground(NOTIF_ID, notification);
+        // FIX: Android 14+ (API 34) exige o tipo de servico foreground declarado no Manifest
+        // ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE = 0x10 = 16
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34
+            startForeground(NOTIF_ID, notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+        } else {
+            startForeground(NOTIF_ID, notification);
+        }
         Log.i(TAG, "[BLE] startForeground() chamado — serviço em foreground");
     }
 

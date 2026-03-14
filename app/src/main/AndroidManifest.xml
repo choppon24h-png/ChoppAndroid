@@ -17,6 +17,13 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
 
+    <!-- FIX: Permissões obrigatórias para startForeground() no Android 9+ -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- FIX: Tipo específico obrigatório no Android 14+ (targetSdk 34+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Permissão para exibir notificações (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Permissões para sistema de atualização de APK (v3.2.0) -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
@@ -98,9 +105,13 @@
             android:screenOrientation="reversePortrait"
             android:theme="@style/Theme.ChoppOnTap" />
 
+        <!-- FIX: foregroundServiceType="connectedDevice" obrigatório no Android 14+
+             para serviços que gerenciam conexões Bluetooth -->
         <service
             android:name=".BluetoothService"
-            android:enabled="true" />
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- FileProvider para instalação de APK via sistema de atualização (v3.2.0) -->
         <provider
