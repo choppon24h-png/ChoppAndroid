@@ -104,6 +104,14 @@ public class PagamentoConcluido extends AppCompatActivity {
     /** Delay antes de navegar para Home após dosagem completa (FIX-6) */
     private static final long HOME_NAVIGATE_DELAY_MS = 3_000L;
 
+    // ── DIAGNÓSTICO: Timeout de segurança BLE após envio de $ML ──────────────
+    // Se o ESP32 não responder com OK em BLE_RESPONSE_TIMEOUT_MS após o $ML,
+    // o sistema tenta reenviar automaticamente (até BLE_MAX_RETRIES vezes).
+    private static final long BLE_RESPONSE_TIMEOUT_MS = 5_000L;  // 5s
+    private static final int  BLE_MAX_RETRIES         = 3;
+    private int  mBleRetryCount  = 0;
+    private Runnable mBleResponseTimeoutRunnable = null;
+
     private final Handler  mWatchdogHandler  = new Handler(Looper.getMainLooper());
     private final Handler  mMainHandler      = new Handler(Looper.getMainLooper());
     private boolean        mWatchdogActive   = false;
@@ -285,6 +293,10 @@ public class PagamentoConcluido extends AppCompatActivity {
         // OK — válvula aberta
         if ("OK".equalsIgnoreCase(msg)) {
             Log.i(TAG, "[BLE] OK — válvula ABERTA. Iniciando watchdog (" + WATCHDOG_TIMEOUT_MS / 1000 + "s)");
+            // ── DIAGNÓSTICO: cancela timeout de resposta BLE (OK recebido com sucesso) ──
+            cancelarTimeoutRespostaBLE();
+            mBleRetryCount = 0;
+            Log.i(TAG, "[DIAG] OK recebido — timeout BLE cancelado, retry zerado");
             mValvulaAberta = true;
             atualizarStatus("🍺 Servindo...");
             // Esconder botão "Continuar servindo" enquanto está servindo
@@ -436,6 +448,70 @@ public class PagamentoConcluido extends AppCompatActivity {
      * PRÉ-CONDIÇÃO: só deve ser chamado após ACTION_WRITE_READY,
      * que garante que o estado BLE é READY (AUTH:OK já recebido).
      */
+    // ─────────────────────────────────────────────────────────────────────
+    // Timeout de segurança BLE: se ESP32 não responder com OK em 5s, reenviar
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private void iniciarTimeoutRespostaBLE(int volumeMl) {
+        cancelarTimeoutRespostaBLE();
+        Log.d(TAG, "[DIAG] Iniciando timeout de resposta BLE (" + BLE_RESPONSE_TIMEOUT_MS / 1000 + "s) — aguardando OK do ESP32");
+        mBleResponseTimeoutRunnable = () -> {
+            if (mValvulaAberta || mLiberacaoFinalizada) {
+                Log.d(TAG, "[DIAG] Timeout BLE cancelado — válvula já aberta ou liberação finalizada");
+                return;
+            }
+            mBleRetryCount++;
+            Log.e(TAG, "[DIAG] *** TIMEOUT BLE *** ESP32 não respondeu com OK em "
+                    + BLE_RESPONSE_TIMEOUT_MS / 1000 + "s. Tentativa " + mBleRetryCount + "/" + BLE_MAX_RETRIES);
+
+            // Diagnóstico do estado atual
+            if (mBluetoothService != null) {
+                Log.e(TAG, "[DIAG] Estado BLE: " + mBluetoothService.getBleState().name()
+                        + " | isReady=" + mBluetoothService.isReady()
+                        + " | connected=" + mBluetoothService.connected());
+                android.bluetooth.BluetoothDevice dev = mBluetoothService.getBoundDevice();
+                if (dev != null) {
+                    Log.e(TAG, "[DIAG] Device: " + dev.getAddress()
+                            + " | bond=" + dev.getBondState());
+                }
+            } else {
+                Log.e(TAG, "[DIAG] BluetoothService é NULO — serviço desconectado!");
+            }
+
+            if (mBleRetryCount <= BLE_MAX_RETRIES) {
+                if (mBluetoothService != null && mBluetoothService.isReady()) {
+                    Log.w(TAG, "[DIAG] Reenviando $ML:" + volumeMl + " (retry " + mBleRetryCount + ")");
+                    atualizarStatus("⚠ Sem resposta do ESP32. Reenviando comando... (" + mBleRetryCount + "/" + BLE_MAX_RETRIES + ")");
+                    mComandoEnviado = false;
+                    enviarComandoML(volumeMl);
+                } else {
+                    Log.e(TAG, "[DIAG] BLE não está READY para reenvio — aguardando reconexão");
+                    atualizarStatus("⚠ Aguardando reconexão com o dispositivo...");
+                    // O ACTION_WRITE_READY cuidará do reenvio quando reconectar
+                }
+            } else {
+                Log.e(TAG, "[DIAG] Máximo de retries (" + BLE_MAX_RETRIES + ") atingido — exibindo botão manual");
+                atualizarStatus("❌ Sem resposta do ESP32 após " + BLE_MAX_RETRIES + " tentativas.");
+                runOnUiThread(() -> {
+                    btnLiberar.setText("Tentar novamente (" + volumeMl + "ml)");
+                    btnLiberar.setEnabled(true);
+                    btnLiberar.setVisibility(View.VISIBLE);
+                });
+                mBleRetryCount = 0;
+                mComandoEnviado = false;
+            }
+        };
+        mMainHandler.postDelayed(mBleResponseTimeoutRunnable, BLE_RESPONSE_TIMEOUT_MS);
+    }
+
+    private void cancelarTimeoutRespostaBLE() {
+        if (mBleResponseTimeoutRunnable != null) {
+            mMainHandler.removeCallbacks(mBleResponseTimeoutRunnable);
+            mBleResponseTimeoutRunnable = null;
+            Log.d(TAG, "[DIAG] Timeout resposta BLE cancelado");
+        }
+    }
+
     private void enviarComandoML(int volumeMl) {
         if (mBluetoothService == null) {
             Log.e(TAG, "[BLE] enviarComandoML(" + volumeMl + ") — BluetoothService nulo!");
@@ -454,10 +530,34 @@ public class PagamentoConcluido extends AppCompatActivity {
         mComandoEnviado = true;
         mlsSolicitado   = volumeMl;
         String cmd = "$ML:" + volumeMl;
-        Log.i(TAG, "[BLE] Enviando comando: " + cmd);
+
+        // ── DIAGNÓSTICO: log detalhado do estado antes do envio ──────────────
+        Log.i(TAG, "[DIAG] ════════════════════════════════════════════════");
+        Log.i(TAG, "[DIAG] ENVIANDO $ML — diagnóstico completo:");
+        Log.i(TAG, "[DIAG]   comando    = " + cmd);
+        Log.i(TAG, "[DIAG]   bleState   = " + mBluetoothService.getBleState().name());
+        Log.i(TAG, "[DIAG]   isReady    = " + mBluetoothService.isReady());
+        Log.i(TAG, "[DIAG]   connected  = " + mBluetoothService.connected());
+        Log.i(TAG, "[DIAG]   targetMac  = " + mBluetoothService.getTargetMac());
+        android.bluetooth.BluetoothDevice devDiag = mBluetoothService.getBoundDevice();
+        if (devDiag != null) {
+            Log.i(TAG, "[DIAG]   device     = " + devDiag.getAddress()
+                    + " | bond=" + devDiag.getBondState());
+        } else {
+            Log.w(TAG, "[DIAG]   device     = NULL (GATT nulo)");
+        }
+        Log.i(TAG, "[DIAG]   qtd_ml     = " + qtd_ml);
+        Log.i(TAG, "[DIAG]   liberado   = " + liberado);
+        Log.i(TAG, "[DIAG]   retryCount = " + mBleRetryCount);
+        Log.i(TAG, "[DIAG] ════════════════════════════════════════════════");
+
         atualizarStatus("⏳ Aguardando abertura da válvula...");
         mBluetoothService.write(cmd);
         Log.i(TAG, "[BLE] Aguardando confirmação OK do ESP32...");
+
+        // ── DIAGNÓSTICO: inicia timeout de segurança BLE ─────────────────────
+        // Se o ESP32 não responder com OK em BLE_RESPONSE_TIMEOUT_MS, reenviar
+        iniciarTimeoutRespostaBLE(volumeMl);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -634,6 +734,7 @@ public class PagamentoConcluido extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         cancelarWatchdog();
+        cancelarTimeoutRespostaBLE();
         mMainHandler.removeCallbacksAndMessages(null);
         if (currentImageTask != null) currentImageTask.cancel(true);
         imageExecutor.shutdown();

@@ -544,8 +544,21 @@ public class BluetoothService extends Service {
         @Override
         public void onCharacteristicChanged(BluetoothGatt gatt,
                                             BluetoothGattCharacteristic characteristic) {
-            String data = new String(characteristic.getValue()).trim();
-            Log.d(TAG, "[GATT] ESP32→Android: [" + data + "] | estado=" + mBleState.name());
+            byte[] raw = characteristic.getValue();
+            String data = (raw != null) ? new String(raw).trim() : "";
+
+            // ── DIAGNÓSTICO: log detalhado de cada pacote recebido do ESP32 ────────────
+            Log.i(TAG, "[DIAG] ═══ NOTIFICAÇÃO ESP32 ═══");
+            Log.i(TAG, "[DIAG]   dado bruto : [" + data + "]");
+            Log.i(TAG, "[DIAG]   bytes       : " + (raw != null ? raw.length : 0) + " bytes");
+            Log.i(TAG, "[DIAG]   uuid        : " + characteristic.getUuid());
+            Log.i(TAG, "[DIAG]   estado BLE  : " + mBleState.name());
+            Log.i(TAG, "[DIAG] ════════════════════════════");
+
+            if (data.isEmpty()) {
+                Log.w(TAG, "[DIAG] Pacote vazio recebido — ignorando");
+                return;
+            }
 
             if ("AUTH:OK".equalsIgnoreCase(data)) {
                 Log.i(TAG, "[GATT] *** AUTH:OK recebido *** — transitando para READY");
@@ -553,11 +566,23 @@ public class BluetoothService extends Service {
                 if (mBleState != BleState.READY) {
                     transitionTo(BleState.READY);
                     broadcastWriteReady();
+                } else {
+                    Log.w(TAG, "[DIAG] AUTH:OK recebido mas já estava em READY — re-emitindo ACTION_WRITE_READY");
+                    broadcastWriteReady();
                 }
             } else if ("AUTH:FAIL".equalsIgnoreCase(data)) {
                 Log.e(TAG, "[GATT] AUTH:FAIL — PIN incorreto ou bond inválido");
                 broadcastConnectionStatus("auth_fail");
+            } else if (data.startsWith("VP:")) {
+                Log.d(TAG, "[DIAG] VP recebido: " + data + " | estado=" + mBleState.name());
+            } else if (data.startsWith("ML:") || "ML".equalsIgnoreCase(data)) {
+                Log.i(TAG, "[DIAG] ML recebido (válvula fechada): " + data);
+            } else if ("OK".equalsIgnoreCase(data)) {
+                Log.i(TAG, "[DIAG] OK recebido (válvula aberta) | estado=" + mBleState.name());
+            } else {
+                Log.d(TAG, "[DIAG] Pacote não classificado: [" + data + "]");
             }
+
             // Encaminha todos os dados para as Activities (VP:, ML:, QP:, etc.)
             broadcastData(data);
         }
@@ -565,13 +590,53 @@ public class BluetoothService extends Service {
         @Override
         public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor,
                                       int status) {
-            Log.d(TAG, "[GATT] CCCD write: " + (status == BluetoothGatt.GATT_SUCCESS ? "OK" : "FALHOU=" + status));
+            // ── DIAGNÓSTICO: verificação do subscribe de notify ─────────────────
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.i(TAG, "[DIAG] CCCD write OK — notificações NUS TX ATIVAS");
+                Log.i(TAG, "[DIAG]   descriptor UUID: " + descriptor.getUuid());
+                Log.i(TAG, "[DIAG]   characteristic : " + descriptor.getCharacteristic().getUuid());
+            } else {
+                Log.e(TAG, "[DIAG] CCCD write FALHOU (status=" + status + ") — notificações NUS TX NÃO ATIVAS!");
+                Log.e(TAG, "[DIAG] PROBLEMA CRÍTICO: sem notify ativo, o ESP32 não consegue enviar dados ao Android!");
+                // Tenta reativar as notificações
+                mMainHandler.postDelayed(() -> {
+                    if (mBluetoothGatt != null) {
+                        BluetoothGattService svc = mBluetoothGatt.getService(NUS_SERVICE_UUID);
+                        if (svc != null) {
+                            BluetoothGattCharacteristic tx = svc.getCharacteristic(NUS_TX_CHARACTERISTIC_UUID);
+                            if (tx != null) {
+                                Log.w(TAG, "[DIAG] Retentando ativar notificações NUS TX...");
+                                setupNotifications(mBluetoothGatt, tx);
+                            }
+                        }
+                    }
+                }, 1_000);
+            }
         }
 
         @Override
         public void onCharacteristicWrite(BluetoothGatt gatt,
                                           BluetoothGattCharacteristic characteristic, int status) {
-            Log.d(TAG, "[GATT] onCharacteristicWrite: " + (status == BluetoothGatt.GATT_SUCCESS ? "OK" : "FALHOU=" + status));
+            // ── DIAGNÓSTICO: log detalhado do write callback ─────────────────────
+            String valorEscrito = (characteristic.getValue() != null)
+                    ? new String(characteristic.getValue()) : "null";
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.i(TAG, "[DIAG] onCharacteristicWrite OK | dado=[" + valorEscrito + "] | uuid=" + characteristic.getUuid());
+
+                // Ponto crítico: se o dado escrito foi $ML, o ESP32 deve responder com OK
+                // via notificação. Se não responder, o timeout de segurança BLE no
+                // PagamentoConcluido.java (iniciarTimeoutRespostaBLE) fará o reenvio.
+                if (valorEscrito.startsWith("$ML:")) {
+                    Log.i(TAG, "[DIAG] $ML escrito com sucesso — aguardando OK do ESP32 via notify...");
+                    Log.i(TAG, "[DIAG] Se OK não chegar em 5s, PagamentoConcluido fará reenvio automático");
+                } else if (valorEscrito.startsWith("$AUTH:")) {
+                    Log.i(TAG, "[DIAG] $AUTH escrito com sucesso — aguardando AUTH:OK via notify...");
+                }
+            } else {
+                Log.e(TAG, "[DIAG] onCharacteristicWrite FALHOU (status=" + status
+                        + ") | dado=[" + valorEscrito + "]");
+                Log.e(TAG, "[DIAG] Causa possível: GATT congestionado, MTU excedido ou BLE desconectado");
+            }
         }
     };
 
