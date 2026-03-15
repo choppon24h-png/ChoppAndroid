@@ -57,6 +57,7 @@ dependencies {
     implementation ("io.jsonwebtoken:jjwt:0.7.0")
     implementation ("com.google.code.gson:gson:2.10.1")
     implementation ("no.nordicsemi.android:ble:2.11.0")
+    implementation ("com.journeyapps:zxing-android-embedded:4.3.0")
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)

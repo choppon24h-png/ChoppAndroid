@@ -57,34 +57,37 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/btnAcessoQrCode" />
 
-    <!-- Container do QR Code (Inicialmente oculto) -->
+    <!-- Container de status do QR Code (ProgressBar + mensagem) -->
     <LinearLayout
         android:id="@+id/layoutQrAcesso"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:gravity="center"
         android:orientation="vertical"
+        android:paddingTop="32dp"
         android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/btnAcessoSenha">
 
-        <ImageView
-            android:id="@+id/imgQrAcesso"
-            android:layout_width="250dp"
-            android:layout_height="250dp"
-            android:scaleType="fitCenter" />
+        <ProgressBar
+            android:id="@+id/progressQr"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:indeterminateTint="@color/choppon_orange"
+            android:visibility="gone" />
 
         <TextView
-            android:id="@+id/txtSenhaGerada"
+            android:id="@+id/txtStatusQr"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="XXXXXX"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:text=""
             android:textColor="@color/choppon_orange"
-            android:textSize="24sp"
-            android:textStyle="bold" />
+            android:textSize="15sp"
+            android:visibility="gone" />
+
     </LinearLayout>
 
     <!-- Campo de Senha (Inicialmente oculto) -->
