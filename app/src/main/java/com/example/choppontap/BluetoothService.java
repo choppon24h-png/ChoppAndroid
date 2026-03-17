@@ -30,8 +30,18 @@ import android.util.Log;
 
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
+import android.provider.Settings;
+import java.io.IOException;
 import java.lang.reflect.Method;
+import java.util.Date;
 import java.util.UUID;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import okhttp3.FormBody;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import java.util.concurrent.TimeUnit;
 
 /**
  * BluetoothService — Serviço BLE definitivo para CHOPP ESP32.
@@ -308,22 +318,35 @@ public class BluetoothService extends Service {
     // Scan BLE — usado apenas quando não há MAC salvo
     // ═════════════════════════════════════════════════════════════════════════
 
+     // ── Conjunto de MACs já validados (evita revalidar o mesmo MAC no mesmo scan) ──
+    private final java.util.Set<String> mMacsValidando = new java.util.HashSet<>();
+
     private final ScanCallback mScanCallback = new ScanCallback() {
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
             BluetoothDevice device = result.getDevice();
             String name = device.getName();
-            if (name == null) return;
 
-            Log.d(TAG, "[SCAN] Dispositivo encontrado: " + name + " | " + device.getAddress());
+            // Regra 1: ignorar dispositivos sem nome
+            if (name == null || name.isEmpty()) return;
 
-            // Filtra por prefixo CHOPP_
+            Log.d(TAG, "[BLE] Dispositivo encontrado: " + name + " | " + device.getAddress());
+
+            // Regra 2: ignorar dispositivos cujo nome não começa com CHOPP_
             if (!name.startsWith(BLE_NAME_PREFIX)) return;
 
-            Log.i(TAG, "[SCAN] *** CHOPP encontrado: " + name + " | " + device.getAddress() + " ***");
-            pararScan();
-            salvarMac(device.getAddress());
-            iniciarBondEConectar(device);
+            Log.i(TAG, "[BLE] Dispositivo encontrado: " + name + " MAC " + device.getAddress());
+
+            // Regra 3: não revalidar MAC já em processo de validação
+            String mac = device.getAddress();
+            synchronized (mMacsValidando) {
+                if (mMacsValidando.contains(mac)) return;
+                mMacsValidando.add(mac);
+            }
+
+            // Validar MAC na API antes de salvar e conectar
+            Log.i(TAG, "[BLE] Validando MAC na API: " + mac);
+            validarMacNaApi(device);
         }
 
         @Override
@@ -332,6 +355,95 @@ public class BluetoothService extends Service {
             mScanning = false;
         }
     };
+
+    /**
+     * Valida o MAC BLE na API verify_tap_mac.php.
+     * Executado em thread de background (OkHttp síncrono).
+     * Se válido: para scan, salva MAC, conecta.
+     * Se inválido: remove da lista de validando e continua scan.
+     */
+    private void validarMacNaApi(BluetoothDevice device) {
+        final String mac = device.getAddress();
+        final String androidId = Settings.Secure.getString(
+                getContentResolver(), Settings.Secure.ANDROID_ID);
+
+        new Thread(() -> {
+            try {
+                // Gera JWT com a mesma chave do ApiHelper
+                String token = gerarJwtToken();
+
+                OkHttpClient client = new OkHttpClient.Builder()
+                        .connectTimeout(10, TimeUnit.SECONDS)
+                        .readTimeout(15, TimeUnit.SECONDS)
+                        .build();
+
+                okhttp3.RequestBody body = new FormBody.Builder()
+                        .add("android_id", androidId != null ? androidId : "")
+                        .add("mac", mac)
+                        .build();
+
+                Request request = new Request.Builder()
+                        .url("https://ochoppoficial.com.br/api/verify_tap_mac.php")
+                        .header("token", token)
+                        .post(body)
+                        .build();
+
+                try (Response response = client.newCall(request).execute()) {
+                    String responseBody = response.body() != null
+                            ? response.body().string() : "";
+
+                    Log.d(TAG, "[BLE] Resposta API verify_tap_mac: HTTP "
+                            + response.code() + " | " + responseBody);
+
+                    if (response.isSuccessful() && responseBody.contains("\"valid\":true")) {
+                        // MAC válido — para scan, salva e conecta
+                        Log.i(TAG, "[BLE] MAC válido encontrado: " + mac);
+                        Log.i(TAG, "[BLE] Salvando MAC: " + mac);
+                        mMainHandler.post(() -> {
+                            pararScan();
+                            salvarMac(mac);
+                            Log.i(TAG, "[BLE] Conectando ao ESP32: " + mac);
+                            iniciarBondEConectar(device);
+                        });
+                    } else {
+                        // MAC inválido — remove da lista e continua scan
+                        Log.i(TAG, "[BLE] MAC inválido — ignorando: " + mac);
+                        synchronized (mMacsValidando) {
+                            mMacsValidando.remove(mac);
+                        }
+                    }
+                }
+
+            } catch (Exception e) {
+                Log.e(TAG, "[BLE] Erro ao validar MAC na API: " + e.getMessage());
+                synchronized (mMacsValidando) {
+                    mMacsValidando.remove(mac);
+                }
+            }
+        }).start();
+    }
+
+    /**
+     * Gera JWT com a mesma chave e padrão do ApiHelper.java.
+     * Necessário porque o BluetoothService não tem acesso ao ApiHelper.
+     */
+    private String gerarJwtToken() {
+        try {
+            long nowMillis = System.currentTimeMillis();
+            Date issuedAt  = new Date(nowMillis - 300_000L);  // -5 min (clock skew)
+            Date expiresAt = new Date(nowMillis + 7_200_000L); // +2 horas
+            return Jwts.builder()
+                    .setIssuedAt(issuedAt)
+                    .setExpiration(expiresAt)
+                    .setId(UUID.randomUUID().toString())
+                    .claim("app", "choppon_tap")
+                    .signWith(SignatureAlgorithm.HS256, "teaste".getBytes("UTF-8"))
+                    .compact();
+        } catch (Exception e) {
+            Log.e(TAG, "[BLE] Erro ao gerar JWT: " + e.getMessage());
+            return "";
+        }
+    } };
 
     // Delay entre tentativas de scan quando nenhum dispositivo CHOPP_ é encontrado
     private static final long SCAN_RETRY_DELAY_MS = 5_000L; // 5s entre scans
@@ -360,8 +472,10 @@ public class BluetoothService extends Service {
             Log.w(TAG, "[SCAN] Bluetooth desativado — scan cancelado");
             return;
         }
+        // Limpa MACs em validação ao iniciar novo ciclo de scan
+        synchronized (mMacsValidando) { mMacsValidando.clear(); }
         mScanning = true;
-        Log.i(TAG, "[SCAN] Iniciando scan por dispositivos CHOPP_...");
+        Log.i(TAG, "[BLE] MAC não configurado — iniciando scan inteligente");
         broadcastConnectionStatus("scanning");
         mBleScanner.startScan(mScanCallback);
 
