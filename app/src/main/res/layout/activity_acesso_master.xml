@@ -57,18 +57,27 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/btnAcessoQrCode" />
 
-    <!-- Container de status do QR Code (ProgressBar + mensagem) -->
+    <!-- Container QR Code: imagem gerada + status + loading -->
     <LinearLayout
         android:id="@+id/layoutQrAcesso"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingTop="32dp"
+        android:paddingTop="24dp"
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/btnAcessoSenha">
+
+        <!-- QR Code gerado pelo Android -->
+        <ImageView
+            android:id="@+id/imgQrCode"
+            android:layout_width="260dp"
+            android:layout_height="260dp"
+            android:contentDescription="QR Code Master"
+            android:scaleType="fitCenter"
+            android:visibility="gone" />
 
         <ProgressBar
             android:id="@+id/progressQr"
@@ -85,7 +94,7 @@
             android:gravity="center"
             android:text=""
             android:textColor="@color/choppon_orange"
-            android:textSize="15sp"
+            android:textSize="14sp"
             android:visibility="gone" />
 
     </LinearLayout>

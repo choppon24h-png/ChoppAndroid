@@ -1,28 +1,30 @@
 package com.example.choppontap;
 
-import android.Manifest;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.ContextCompat;
 
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
-import com.google.zxing.integration.android.IntentIntegrator;
-import com.google.zxing.integration.android.IntentResult;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.WriterException;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.qrcode.QRCodeWriter;
 
 import org.json.JSONObject;
 
@@ -39,42 +41,51 @@ import okhttp3.Response;
 /**
  * AcessoMaster — Tela de autenticação para acesso ao ServiceTools.
  *
- * Dois modos de acesso:
- *   1. QR Code: lê o QR Code gerado em permissoes.php no ERP e valida via API.
- *   2. Senha: digita a senha de 6 dígitos (padrão 259087 ou via API).
+ * NOVO FLUXO QR Code (lógica invertida):
+ *   1. Android gera token via API (POST /api/request_master_qr.php?action=generate)
+ *   2. Android exibe QR Code na tela com o token
+ *   3. Admin no ERP (permissoes.php) clica "Habilitar", abre câmera do PC,
+ *      escaneia o QR Code do tablet e aprova
+ *   4. Android faz polling a cada 3s (POST /api/request_master_qr.php?action=poll)
+ *   5. Ao receber status=approved → abre ServiceTools
  *
- * Fluxo QR Code:
- *   Botão "Acesso QR Code"
- *     → solicita permissão de câmera (se necessário)
- *     → abre scanner ZXing
- *     → lê "CHOPPON_MASTER:<64-char-hex-token>"
- *     → POST /api/validate_master_qr.php com JWT + qr_token + device_id
- *     → sucesso → liberarAcesso()
+ * Fluxo Senha:
+ *   Digita 6 dígitos → 259087 libera localmente, outros validam via API
  */
 public class AcessoMaster extends AppCompatActivity {
 
-    private static final String TAG = "ACESSO_MASTER";
+    private static final String TAG          = "ACESSO_MASTER";
+    private static final int    POLL_INTERVAL_MS = 3000;  // 3 segundos
+    private static final int    QR_EXPIRY_MS     = 300000; // 5 minutos
 
-    private Button btnAcessoQrCode, btnAcessoSenha;
-    private LinearLayout layoutQrAcesso;
+    // Views
+    private Button          btnAcessoQrCode, btnAcessoSenha;
+    private LinearLayout    layoutQrAcesso;
     private TextInputLayout layoutInputSenha;
     private TextInputEditText edtSenhaAcesso;
-    private ProgressBar progressQr;
-    private TextView txtStatusQr;
+    private ProgressBar     progressQr;
+    private TextView        txtStatusQr;
+    private ImageView       imgQrCode;
 
-    private String android_id;
-    private ApiHelper apiHelper;
+    // Estado
+    private String  android_id;
+    private int     mTokenId    = -1;
+    private boolean mPolling    = false;
+    private boolean mAprovado   = false;
+
+    private ApiHelper       apiHelper;
+    private final Handler   mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
-    // Launcher para solicitar permissão de câmera
-    private final ActivityResultLauncher<String> cameraPermissionLauncher =
-            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
-                if (granted) {
-                    iniciarScannerQr();
-                } else {
-                    Toast.makeText(this, "Permissão de câmera necessária para ler QR Code", Toast.LENGTH_LONG).show();
-                }
-            });
+    // ── Runnable de polling ───────────────────────────────────────────────────
+    private final Runnable pollingRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!mPolling || mAprovado) return;
+            verificarStatusToken();
+            mainHandler.postDelayed(this, POLL_INTERVAL_MS);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -84,6 +95,7 @@ public class AcessoMaster extends AppCompatActivity {
         android_id = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
         apiHelper  = new ApiHelper(this);
 
+        // Bind views
         btnAcessoQrCode  = findViewById(R.id.btnAcessoQrCode);
         btnAcessoSenha   = findViewById(R.id.btnAcessoSenha);
         layoutQrAcesso   = findViewById(R.id.layoutQrAcesso);
@@ -91,14 +103,14 @@ public class AcessoMaster extends AppCompatActivity {
         edtSenhaAcesso   = findViewById(R.id.edtSenhaAcesso);
         progressQr       = findViewById(R.id.progressQr);
         txtStatusQr      = findViewById(R.id.txtStatusQr);
+        imgQrCode        = findViewById(R.id.imgQrCode);
 
-        btnAcessoQrCode.setOnClickListener(v -> solicitarCameraEEscanear());
+        btnAcessoQrCode.setOnClickListener(v -> iniciarFluxoQrCode());
         btnAcessoSenha.setOnClickListener(v -> mostrarInputSenha());
 
         edtSenhaAcesso.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void afterTextChanged(android.text.Editable s) {}
-
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 if (s.length() == 6) {
@@ -113,138 +125,212 @@ public class AcessoMaster extends AppCompatActivity {
         });
     }
 
-    // ── Câmera e Scanner ─────────────────────────────────────────────────────
+    // ── Fluxo QR Code ────────────────────────────────────────────────────────
 
-    private void solicitarCameraEEscanear() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED) {
-            iniciarScannerQr();
-        } else {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA);
-        }
-    }
+    /**
+     * Passo 1: solicitar token ao servidor e exibir QR Code
+     */
+    private void iniciarFluxoQrCode() {
+        // Resetar estado anterior
+        pararPolling();
+        mTokenId  = -1;
+        mAprovado = false;
 
-    private void iniciarScannerQr() {
-        layoutQrAcesso.setVisibility(View.GONE);
+        // Mostrar área QR com loading
+        layoutQrAcesso.setVisibility(View.VISIBLE);
         layoutInputSenha.setVisibility(View.GONE);
-
-        IntentIntegrator integrator = new IntentIntegrator(this);
-        integrator.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
-        integrator.setPrompt("Aponte para o QR Code Master do ERP");
-        integrator.setCameraId(0);
-        integrator.setBeepEnabled(true);
-        integrator.setBarcodeImageEnabled(false);
-        integrator.setOrientationLocked(false);
-        integrator.initiateScan();
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (result != null) {
-            String conteudo = result.getContents();
-            if (conteudo == null) {
-                Toast.makeText(this, "Leitura cancelada", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            Log.d(TAG, "[QR] Conteúdo lido: " + conteudo);
-            processarQrCode(conteudo);
-        } else {
-            super.onActivityResult(requestCode, resultCode, data);
-        }
-    }
-
-    // ── Processamento do QR Code ──────────────────────────────────────────────
-
-    private void processarQrCode(String conteudo) {
-        final String PREFIX = "CHOPPON_MASTER:";
-        if (!conteudo.startsWith(PREFIX)) {
-            Log.w(TAG, "[QR] Formato inválido: " + conteudo);
-            mostrarErroQr("QR Code inválido. Use o QR Code gerado no painel ERP.");
-            return;
-        }
-        String token = conteudo.substring(PREFIX.length()).trim();
-        if (!token.matches("[0-9a-f]{64}")) {
-            Log.w(TAG, "[QR] Token com formato inválido: " + token);
-            mostrarErroQr("QR Code corrompido ou expirado. Gere um novo no ERP.");
-            return;
-        }
-        Log.i(TAG, "[QR] Token válido, validando na API...");
-        validarTokenNaApi(token);
-    }
-
-    private void mostrarErroQr(String mensagem) {
-        runOnUiThread(() -> {
-            progressQr.setVisibility(View.GONE);
-            txtStatusQr.setVisibility(View.VISIBLE);
-            txtStatusQr.setText(mensagem);
-            txtStatusQr.setTextColor(getResources().getColor(android.R.color.holo_red_dark, null));
-            layoutQrAcesso.setVisibility(View.VISIBLE);
-        });
-    }
-
-    // ── Validação na API ────────────────────────────────────────────────────────────
-
-    private void validarTokenNaApi(String qrToken) {
-        runOnUiThread(() -> {
-            layoutQrAcesso.setVisibility(View.VISIBLE);
-            progressQr.setVisibility(View.VISIBLE);
-            txtStatusQr.setVisibility(View.VISIBLE);
-            txtStatusQr.setText("Validando QR Code...");
-            txtStatusQr.setTextColor(getResources().getColor(android.R.color.darker_gray, null));
-            btnAcessoQrCode.setEnabled(false);
-            btnAcessoSenha.setEnabled(false);
-        });
+        imgQrCode.setVisibility(View.GONE);
+        progressQr.setVisibility(View.VISIBLE);
+        txtStatusQr.setVisibility(View.VISIBLE);
+        txtStatusQr.setText("Gerando QR Code...");
+        btnAcessoQrCode.setEnabled(false);
+        btnAcessoSenha.setEnabled(false);
 
         Map<String, String> body = new HashMap<>();
-        body.put("qr_token",  qrToken);
+        body.put("action",    "generate");
         body.put("device_id", android_id != null ? android_id : "");
 
-        apiHelper.sendPost(body, "validate_master_qr", new Callback() {
+        apiHelper.sendPost(body, "request_master_qr", new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                Log.e(TAG, "[QR] Falha de rede: " + e.getMessage());
+                Log.e(TAG, "[QR] Falha ao gerar token: " + e.getMessage());
                 runOnUiThread(() -> {
                     progressQr.setVisibility(View.GONE);
+                    txtStatusQr.setText("Erro de conexão. Verifique o Wi-Fi.");
                     btnAcessoQrCode.setEnabled(true);
                     btnAcessoSenha.setEnabled(true);
-                    mostrarErroQr("Erro de conexão. Verifique o Wi-Fi e tente novamente.");
                 });
             }
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                String responseBody = response.body() != null ? response.body().string() : "";
-                Log.d(TAG, "[QR] Resposta API (" + response.code() + "): " + responseBody);
-                runOnUiThread(() -> {
-                    progressQr.setVisibility(View.GONE);
-                    btnAcessoQrCode.setEnabled(true);
-                    btnAcessoSenha.setEnabled(true);
-                });
+                String rb = response.body() != null ? response.body().string() : "";
+                Log.d(TAG, "[QR] Resposta generate: " + rb);
                 try {
-                    JSONObject json = new JSONObject(responseBody);
-                    boolean success = json.optBoolean("success", false);
-                    if (success) {
-                        String userName = json.optString("user_name", "Técnico");
-                        int    userType = json.optInt("user_type", 3);
-                        Log.i(TAG, "[QR] Acesso autorizado para: " + userName);
-                        runOnUiThread(() -> liberarAcesso(userName, userType));
+                    JSONObject json = new JSONObject(rb);
+                    if (json.optBoolean("success", false)) {
+                        mTokenId = json.optInt("token_id", -1);
+                        String qrData = json.optString("qr_data", "");
+                        runOnUiThread(() -> exibirQrCode(qrData));
                     } else {
-                        String msg = json.optString("message", "QR Code inválido ou expirado.");
-                        Log.w(TAG, "[QR] Acesso negado: " + msg);
-                        runOnUiThread(() -> mostrarErroQr(msg));
+                        String msg = json.optString("message", "Erro ao gerar QR Code.");
+                        runOnUiThread(() -> {
+                            progressQr.setVisibility(View.GONE);
+                            txtStatusQr.setText(msg);
+                            btnAcessoQrCode.setEnabled(true);
+                            btnAcessoSenha.setEnabled(true);
+                        });
                     }
                 } catch (Exception e) {
-                    Log.e(TAG, "[QR] Erro ao parsear resposta: " + e.getMessage());
-                    runOnUiThread(() -> mostrarErroQr("Erro ao processar resposta do servidor."));
+                    Log.e(TAG, "[QR] Erro ao parsear generate: " + e.getMessage());
+                    runOnUiThread(() -> {
+                        progressQr.setVisibility(View.GONE);
+                        txtStatusQr.setText("Erro ao processar resposta do servidor.");
+                        btnAcessoQrCode.setEnabled(true);
+                        btnAcessoSenha.setEnabled(true);
+                    });
                 }
             }
         });
     }
 
-    // ── Acesso por Senha ────────────────────────────────────────────────────────────
+    /**
+     * Passo 2: gerar bitmap do QR Code localmente e exibir na tela
+     */
+    private void exibirQrCode(String qrData) {
+        progressQr.setVisibility(View.GONE);
+        try {
+            Bitmap bmp = gerarBitmapQr(qrData, 600);
+            imgQrCode.setImageBitmap(bmp);
+            imgQrCode.setVisibility(View.VISIBLE);
+            txtStatusQr.setText("Aguardando aprovação do administrador...\nAponte a câmera do PC para este QR Code em Permissões.");
+            txtStatusQr.setVisibility(View.VISIBLE);
+            Log.i(TAG, "[QR] QR Code exibido. token_id=" + mTokenId + " | qr_data=" + qrData);
+
+            // Iniciar polling
+            iniciarPolling();
+
+            // Timer de expiração: após 5min, cancelar e avisar
+            mainHandler.postDelayed(() -> {
+                if (!mAprovado) {
+                    pararPolling();
+                    txtStatusQr.setText("QR Code expirado. Toque em 'Acesso QR Code' para gerar um novo.");
+                    imgQrCode.setVisibility(View.GONE);
+                    btnAcessoQrCode.setEnabled(true);
+                    btnAcessoSenha.setEnabled(true);
+                }
+            }, QR_EXPIRY_MS);
+
+        } catch (WriterException e) {
+            Log.e(TAG, "[QR] Erro ao gerar bitmap: " + e.getMessage());
+            txtStatusQr.setText("Erro ao gerar QR Code. Tente novamente.");
+            btnAcessoQrCode.setEnabled(true);
+            btnAcessoSenha.setEnabled(true);
+        }
+    }
+
+    /**
+     * Gera Bitmap do QR Code usando ZXing (sem câmera — apenas geração)
+     */
+    private Bitmap gerarBitmapQr(String content, int size) throws WriterException {
+        QRCodeWriter writer = new QRCodeWriter();
+        BitMatrix matrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size);
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565);
+        for (int x = 0; x < size; x++) {
+            for (int y = 0; y < size; y++) {
+                bmp.setPixel(x, y, matrix.get(x, y) ? Color.BLACK : Color.WHITE);
+            }
+        }
+        return bmp;
+    }
+
+    // ── Polling ───────────────────────────────────────────────────────────────
+
+    private void iniciarPolling() {
+        mPolling = true;
+        mainHandler.postDelayed(pollingRunnable, POLL_INTERVAL_MS);
+        Log.d(TAG, "[QR] Polling iniciado. token_id=" + mTokenId);
+    }
+
+    private void pararPolling() {
+        mPolling = false;
+        mainHandler.removeCallbacks(pollingRunnable);
+        Log.d(TAG, "[QR] Polling parado.");
+    }
+
+    /**
+     * Passo 3: verificar se o admin aprovou o token
+     */
+    private void verificarStatusToken() {
+        if (mTokenId <= 0) return;
+
+        Map<String, String> body = new HashMap<>();
+        body.put("action",    "poll");
+        body.put("token_id",  String.valueOf(mTokenId));
+        body.put("device_id", android_id != null ? android_id : "");
+
+        apiHelper.sendPost(body, "request_master_qr", new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                Log.w(TAG, "[QR] Polling falhou (rede): " + e.getMessage());
+                // Continuar polling mesmo com falha de rede temporária
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                String rb = response.body() != null ? response.body().string() : "";
+                Log.d(TAG, "[QR] Poll resposta: " + rb);
+                try {
+                    JSONObject json = new JSONObject(rb);
+                    String status = json.optString("status", "pending");
+
+                    switch (status) {
+                        case "approved":
+                            mAprovado = true;
+                            pararPolling();
+                            String userName = json.optString("user_name", "Técnico");
+                            int    userType = json.optInt("user_type", 3);
+                            Log.i(TAG, "[QR] APROVADO para: " + userName);
+                            runOnUiThread(() -> liberarAcesso(userName, userType));
+                            break;
+
+                        case "rejected":
+                            pararPolling();
+                            Log.w(TAG, "[QR] REJEITADO pelo admin.");
+                            runOnUiThread(() -> {
+                                imgQrCode.setVisibility(View.GONE);
+                                txtStatusQr.setText("Acesso negado pelo administrador.");
+                                btnAcessoQrCode.setEnabled(true);
+                                btnAcessoSenha.setEnabled(true);
+                            });
+                            break;
+
+                        case "expired":
+                            pararPolling();
+                            Log.w(TAG, "[QR] Token expirado.");
+                            runOnUiThread(() -> {
+                                imgQrCode.setVisibility(View.GONE);
+                                txtStatusQr.setText("QR Code expirado. Toque em 'Acesso QR Code' para gerar um novo.");
+                                btnAcessoQrCode.setEnabled(true);
+                                btnAcessoSenha.setEnabled(true);
+                            });
+                            break;
+
+                        default: // pending
+                            Log.d(TAG, "[QR] Aguardando aprovação...");
+                            break;
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "[QR] Erro ao parsear poll: " + e.getMessage());
+                }
+            }
+        });
+    }
+
+    // ── Acesso por Senha ──────────────────────────────────────────────────────
 
     private void mostrarInputSenha() {
+        pararPolling();
         layoutInputSenha.setVisibility(View.VISIBLE);
         layoutQrAcesso.setVisibility(View.GONE);
         edtSenhaAcesso.requestFocus();
@@ -282,16 +368,16 @@ public class AcessoMaster extends AppCompatActivity {
         });
     }
 
-    // ── Liberar Acesso ──────────────────────────────────────────────────────────────
+    // ── Liberar Acesso ────────────────────────────────────────────────────────
 
     private void liberarAcesso(String userName, int userType) {
         Log.i(TAG, "[ACESSO] Liberado para: " + userName);
         Toast.makeText(this, "Acesso Master Liberado — " + userName, Toast.LENGTH_SHORT).show();
         boolean fromOffline = getIntent().getBooleanExtra("from_offline", false);
         Intent intent = new Intent(AcessoMaster.this, ServiceTools.class);
-        intent.putExtra("from_offline", fromOffline);
-        intent.putExtra("master_user_name", userName);
-        intent.putExtra("master_user_type", userType);
+        intent.putExtra("from_offline",      fromOffline);
+        intent.putExtra("master_user_name",  userName);
+        intent.putExtra("master_user_type",  userType);
         startActivity(intent);
         finish();
     }
@@ -299,6 +385,13 @@ public class AcessoMaster extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        pararPolling();
         executor.shutdown();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // Manter polling em background (usuário pode minimizar enquanto admin aprova)
     }
 }
