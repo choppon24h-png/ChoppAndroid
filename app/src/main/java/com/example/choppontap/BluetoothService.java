@@ -165,6 +165,9 @@ public class BluetoothService extends Service {
     private Runnable      mReconnectRunnable = null;
     private Runnable      mScanStopRunnable  = null;
 
+    // ── Fila de comandos BLE ──────────────────────────────────────────────────
+    private CommandQueueManager mCommandQueue;
+
     // ── Binder ────────────────────────────────────────────────────────────────
     private final IBinder mBinder = new LocalBinder();
     public class LocalBinder extends Binder {
@@ -206,6 +209,49 @@ public class BluetoothService extends Service {
             registerReceiver(mPairingReceiver,   pf);
             registerReceiver(mBondStateReceiver, bf);
         }
+
+        // Inicializa fila de comandos BLE com BleWriter e Callback
+        mCommandQueue = new CommandQueueManager(
+                data -> {
+                    // BleWriter: encaminha para write() do serviço
+                    if (!isReady()) {
+                        Log.e(TAG, "[QUEUE] write() bloqueado — BLE não está READY");
+                        return false;
+                    }
+                    write(data);
+                    return true;
+                },
+                new CommandQueueManager.Callback() {
+                    @Override
+                    public void onSend(BleCommand cmd) {
+                        Log.i(TAG, "[QUEUE] → SENT " + cmd.commandId + " | " + cmd.toBleString());
+                    }
+                    @Override
+                    public void onAck(BleCommand cmd) {
+                        Log.i(TAG, "[QUEUE] → ACK " + cmd.commandId);
+                        // Propaga ACK para Activities via broadcast
+                        Intent i = new Intent(ACTION_DATA_AVAILABLE);
+                        i.putExtra(EXTRA_DATA, "QUEUE:ACK:" + cmd.commandId);
+                        LocalBroadcastManager.getInstance(BluetoothService.this).sendBroadcast(i);
+                    }
+                    @Override
+                    public void onDone(BleCommand cmd) {
+                        Log.i(TAG, "[QUEUE] → DONE " + cmd.commandId + " | ml_real=" + cmd.mlReal);
+                        // Propaga DONE para Activities via broadcast
+                        Intent i = new Intent(ACTION_DATA_AVAILABLE);
+                        i.putExtra(EXTRA_DATA, "QUEUE:DONE:" + cmd.commandId + ":" + cmd.mlReal);
+                        LocalBroadcastManager.getInstance(BluetoothService.this).sendBroadcast(i);
+                    }
+                    @Override
+                    public void onError(BleCommand cmd, String reason) {
+                        Log.e(TAG, "[QUEUE] → ERROR " + cmd.commandId + " | " + reason);
+                        // Propaga ERRO para Activities via broadcast
+                        Intent i = new Intent(ACTION_DATA_AVAILABLE);
+                        i.putExtra(EXTRA_DATA, "QUEUE:ERROR:" + cmd.commandId + ":" + reason);
+                        LocalBroadcastManager.getInstance(BluetoothService.this).sendBroadcast(i);
+                    }
+                }
+        );
 
         Log.i(TAG, "[BLE] Serviço iniciado | MAC alvo: "
                 + (mTargetMac != null ? mTargetMac : "NÃO CONFIGURADO — aguardando scan"));
@@ -583,6 +629,9 @@ public class BluetoothService extends Service {
                 }
 
                 // ── Estratégia de reconexão por tipo de status ──
+                // Notifica fila que BLE desconectou — pausa processamento
+                if (mCommandQueue != null) mCommandQueue.onBleDisconnected();
+
                 if (status == GATT_CONN_TIMEOUT || status == 257 || status == GATT_CONN_FAIL_ESTABLISH) {
                     // Timeout ou falha de estabelecimento:
                     // NÃO fechar o GATT (mantém cache de serviços)
@@ -684,15 +733,45 @@ public class BluetoothService extends Service {
                     Log.w(TAG, "[DIAG] AUTH:OK recebido mas já estava em READY — re-emitindo ACTION_WRITE_READY");
                     broadcastWriteReady();
                 }
+                // Notifica fila que BLE está READY para processar comandos
+                if (mCommandQueue != null) mCommandQueue.onBleReady();
+
             } else if ("AUTH:FAIL".equalsIgnoreCase(data)) {
                 Log.e(TAG, "[GATT] AUTH:FAIL — PIN incorreto ou bond inválido");
                 broadcastConnectionStatus("auth_fail");
+
             } else if (data.startsWith("VP:")) {
+                // Progresso parcial de dispensação — repassa para fila (informativo)
                 Log.d(TAG, "[DIAG] VP recebido: " + data + " | estado=" + mBleState.name());
+
+            } else if ("ML:ACK".equalsIgnoreCase(data) || data.startsWith("ACK|")) {
+                // ── ACK do ESP32 — rotear para CommandQueueManager ──────────────
+                Log.i(TAG, "[QUEUE] ML:ACK recebido → roteando para fila");
+                if (mCommandQueue != null) mCommandQueue.onBleResponse(data);
+
+            } else if (data.startsWith("DONE")) {
+                // ── DONE do ESP32 — rotear para CommandQueueManager ─────────────
+                Log.i(TAG, "[QUEUE] DONE recebido → roteando para fila");
+                if (mCommandQueue != null) mCommandQueue.onBleResponse(data);
+
+            } else if (data.equalsIgnoreCase("DUPLICATE") || data.equalsIgnoreCase("ML:DUPLICATE")) {
+                Log.w(TAG, "[QUEUE] DUPLICATE recebido → roteando para fila");
+                if (mCommandQueue != null) mCommandQueue.onBleResponse(data);
+
+            } else if (data.startsWith("ERROR:")) {
+                Log.e(TAG, "[QUEUE] ERROR recebido: " + data + " → roteando para fila");
+                if (mCommandQueue != null) mCommandQueue.onBleResponse(data);
+
+            } else if (data.equalsIgnoreCase("PONG")) {
+                Log.d(TAG, "[QUEUE] PONG recebido → roteando para fila");
+                if (mCommandQueue != null) mCommandQueue.onBleResponse(data);
+
             } else if (data.startsWith("ML:") || "ML".equalsIgnoreCase(data)) {
                 Log.i(TAG, "[DIAG] ML recebido (válvula fechada): " + data);
+
             } else if ("OK".equalsIgnoreCase(data)) {
                 Log.i(TAG, "[DIAG] OK recebido (válvula aberta) | estado=" + mBleState.name());
+
             } else {
                 Log.d(TAG, "[DIAG] Pacote não classificado: [" + data + "]");
             }
@@ -1008,6 +1087,14 @@ public class BluetoothService extends Service {
         mWriteCharacteristic.setValue(data.getBytes());
         boolean ok = mBluetoothGatt.writeCharacteristic(mWriteCharacteristic);
         Log.i(TAG, "[BLE] write(\"" + data + "\") → " + (ok ? "ENVIADO" : "FALHOU"));
+    }
+
+    /**
+     * Retorna o CommandQueueManager para uso pelas Activities.
+     * PagamentoConcluido usa este método para enfileirar comandos SERVE.
+     */
+    public CommandQueueManager getCommandQueue() {
+        return mCommandQueue;
     }
 
     public boolean connected() {

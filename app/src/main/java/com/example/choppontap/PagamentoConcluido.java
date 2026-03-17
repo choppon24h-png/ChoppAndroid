@@ -44,94 +44,73 @@ import okhttp3.Response;
 /**
  * PagamentoConcluido — Tela de liberação do chopp após pagamento confirmado.
  *
- * FLUXO BLE CORRETO (máquina de estados):
- *
- *   DISCONNECTED → CONNECTED → READY → SEND_ML
+ * ═══════════════════════════════════════════════════════════════════
+ * FLUXO COM FILA DE COMANDOS BLE (v2.3)
+ * ═══════════════════════════════════════════════════════════════════
  *
  *   1. Activity inicia → bind no BluetoothService
- *   2. BluetoothService conecta GATT → descobre serviços NUS → aguarda AUTH:OK
- *   3. ESP32 conclui pareamento BLE (PIN 259087) → envia AUTH:OK
- *   4. BluetoothService recebe AUTH:OK → estado READY → emite ACTION_WRITE_READY
- *   5. PagamentoConcluido recebe ACTION_WRITE_READY → envia $ML:<N>
- *   6. ESP32 abre válvula → envia OK → VP: → ML:
+ *   2. BluetoothService conecta GATT → AUTH:OK → READY → ACTION_WRITE_READY
+ *   3. PagamentoConcluido recebe WRITE_READY → chama start_sale.php
+ *   4. Após start_sale OK → enfileira BleCommand SERVE via CommandQueueManager
+ *   5. CommandQueueManager envia $ML:<N>:<cmdId> → aguarda ML:ACK (10s)
+ *   6. ESP32 responde ML:ACK → BluetoothService roteia para CommandQueueManager
+ *   7. CommandQueueManager aguarda DONE (60s)
+ *   8. ESP32 envia DONE → BluetoothService roteia → CommandQueueManager.onDone()
+ *   9. BluetoothService emite QUEUE:DONE:<cmdId>:<ml> via broadcast
+ *  10. PagamentoConcluido recebe QUEUE:DONE → chama finish_sale.php → navega Home
  *
- * CORREÇÕES APLICADAS (2026-03-10):
- *   [FIX-1] Válvula abrindo/fechando ao entrar na tela:
- *           Causa: ao entrar na tela com BLE já em READY (bond existente),
- *           o onServiceConnected() enviava $ML imediatamente. Porém o ESP32
- *           ainda estava processando a reconexão e abria/fechava a válvula
- *           rapidamente. Correção: aguardar 800ms após READY antes de enviar $ML.
+ * Em caso de falha (timeout ACK, timeout DONE, ERROR:BUSY):
+ *   - CommandQueueManager faz retry automático (3x com backoff)
+ *   - Após 3 falhas → emite QUEUE:ERROR → PagamentoConcluido chama fail_sale.php
  *
- *   [FIX-2] Reconexão BLE sem perder estado:
- *           Causa: ao desconectar, mComandoEnviado=true bloqueava o reenvio,
- *           mas a tela não mostrava label de "Reconectando". Correção: exibir
- *           label "Reconectando..." e ao receber ACTION_WRITE_READY após
- *           reconexão, verificar se liberado < qtd_ml para reenviar o restante.
+ * ═══════════════════════════════════════════════════════════════════
+ * CORREÇÕES MANTIDAS
+ * ═══════════════════════════════════════════════════════════════════
  *
- *   [FIX-3] Botão "Continuar servindo" não aparecia:
- *           Causa: o botão era exibido no processarMensagemESP32() (ML:), mas
- *           o código na linha 246 tinha um `if (progressBar != null)` incompleto
- *           que cortava a execução antes de chegar no bloco que exibe o botão.
- *           Correção: reorganizar o bloco runOnUiThread dentro de ML: para
- *           garantir que o botão seja exibido quando liberado < qtd_ml.
- *
- *   [FIX-4] Imagem da bebida não carregava:
- *           Causa: a imagem era carregada via Sqlite.getActiveImageData() (bytes
- *           do banco local), mas o banco pode estar vazio na primeira execução.
- *           Correção: tentar banco local primeiro; se null, baixar da URL via
- *           ApiHelper.getImage() em background thread.
- *
- *   [FIX-5] Fechamento da válvula ao terminar:
- *           Confirmado: o ESP32 envia ML: quando a válvula fecha. O Android
- *           já trata corretamente em processarMensagemESP32(). Adicionado log
- *           explícito e garantia de que sendRequestFim() é chamado.
- *
- *   [FIX-6] Retorno para Home após servir:
- *           Causa: após ML: (dosagem completa), a tela ficava parada sem
- *           navegar para Home. Correção: após 3s de exibir "Dosagem completa!",
- *           navegar automaticamente para Home.java.
- *
- * NUNCA enviar $ML antes de ACTION_WRITE_READY.
+ *   [FIX-1] Delay de 800ms antes de enviar $ML após READY
+ *   [FIX-2] Reconexão BLE sem perder estado — CommandQueueManager preserva cmd ativo
+ *   [FIX-3] Botão "Continuar servindo" exibido em dosagem incompleta
+ *   [FIX-4] Imagem da bebida com fallback banco → URL
+ *   [FIX-5] Fechamento da válvula ao terminar (DONE)
+ *   [FIX-6] Retorno para Home após dosagem completa
  */
 public class PagamentoConcluido extends AppCompatActivity {
 
     private static final String TAG = "PAGAMENTO_CONCLUIDO";
 
-    // ── Watchdog ──────────────────────────────────────────────────────────────
-    private static final long WATCHDOG_TIMEOUT_MS   = 30_000L;
-    /** Delay de segurança antes de enviar $ML após READY (FIX-1) */
-    private static final long ML_SEND_DELAY_MS      = 800L;
+    // ── Timeouts e delays ─────────────────────────────────────────────────────
+    /** Delay de segurança antes de enfileirar $ML após READY (FIX-1) */
+    private static final long ML_SEND_DELAY_MS       = 800L;
     /** Delay antes de navegar para Home após dosagem completa (FIX-6) */
     private static final long HOME_NAVIGATE_DELAY_MS = 3_000L;
+    /** Watchdog: se VP: não chegar em 30s após DONE, algo errou */
+    private static final long WATCHDOG_TIMEOUT_MS    = 30_000L;
 
-    // ── DIAGNÓSTICO: Timeout de segurança BLE após envio de $ML ──────────────
-    // Se o ESP32 não responder com OK em BLE_RESPONSE_TIMEOUT_MS após o $ML,
-    // o sistema tenta reenviar automaticamente (até BLE_MAX_RETRIES vezes).
-    private static final long BLE_RESPONSE_TIMEOUT_MS = 5_000L;  // 5s
-    private static final int  BLE_MAX_RETRIES         = 3;
-    private int  mBleRetryCount  = 0;
-    private Runnable mBleResponseTimeoutRunnable = null;
-
-    private final Handler  mWatchdogHandler  = new Handler(Looper.getMainLooper());
-    private final Handler  mMainHandler      = new Handler(Looper.getMainLooper());
-    private boolean        mWatchdogActive   = false;
+    // ── Handlers ──────────────────────────────────────────────────────────────
+    private final Handler mMainHandler    = new Handler(Looper.getMainLooper());
+    private final Handler mWatchdogHandler = new Handler(Looper.getMainLooper());
 
     // ── Estado da liberação ───────────────────────────────────────────────────
-    private int     qtd_ml              = 0;
-    private int     liberado            = 0;
-    private int     mlsSolicitado       = 0;
-    private int     totalPulsos         = 0;
-    private boolean mValvulaAberta      = false;
+    private int     qtd_ml               = 0;
+    private int     liberado             = 0;
+    private int     totalPulsos          = 0;
+    private boolean mValvulaAberta       = false;
     private boolean mLiberacaoFinalizada = false;
+    private boolean mWatchdogActive      = false;
 
     /**
-     * Protege contra envio duplicado de $ML.
+     * Protege contra enfileiramento duplicado de comandos.
      * Zerado apenas quando:
-     *   a) A liberação é concluída (ML: recebido do ESP32)
-     *   b) O usuário pressiona "Continuar servindo" explicitamente
-     *   c) ERROR:NOT_AUTHENTICATED é recebido (reautenticação necessária)
+     *   a) DONE recebido com sucesso
+     *   b) QUEUE:ERROR recebido (falha irrecuperável)
+     *   c) Usuário pressiona "Continuar servindo" explicitamente
      */
     private boolean mComandoEnviado = false;
+
+    /** ID do BleCommand ativo — para correlacionar QUEUE:DONE e QUEUE:ERROR */
+    private String mActiveCommandId = null;
+    /** SESSION_ID do BleCommand ativo — enviado às APIs ERP */
+    private String mActiveSessionId = null;
 
     // ── Dados do pedido ───────────────────────────────────────────────────────
     private String checkout_id;
@@ -154,9 +133,9 @@ public class PagamentoConcluido extends AppCompatActivity {
     private BluetoothService mBluetoothService;
     private boolean          mIsServiceBound = false;
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
     // Watchdog
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
 
     private final Runnable mWatchdogRunnable = () -> {
         Log.e(TAG, "[APP] WATCHDOG disparado! Fluxo não detectado em "
@@ -179,9 +158,9 @@ public class PagamentoConcluido extends AppCompatActivity {
         });
     };
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
     // BroadcastReceiver — mensagens do BluetoothService
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
 
     private final BroadcastReceiver mServiceUpdateReceiver = new BroadcastReceiver() {
         @Override
@@ -191,54 +170,37 @@ public class PagamentoConcluido extends AppCompatActivity {
 
             switch (action) {
 
+                // ─────────────────────────────────────────────────────────────
+                // BLE READY: canal autenticado — enfileirar comando
+                // ─────────────────────────────────────────────────────────────
                 case BluetoothService.ACTION_WRITE_READY:
-                    // ─────────────────────────────────────────────────────────
-                    // Este broadcast só chega APÓS o ESP32 enviar AUTH:OK,
-                    // ou seja, o canal está autenticado e pronto.
-                    //
-                    // FIX-1: aguardar ML_SEND_DELAY_MS antes de enviar $ML
-                    // para evitar que a válvula abra/feche rapidamente ao
-                    // entrar na tela (race condition entre READY e ESP32 pronto).
-                    //
-                    // FIX-2: se houve reconexão e já liberou parte, enviar
-                    // apenas o restante (qtd_ml - liberado).
-                    // ─────────────────────────────────────────────────────────
-                    Log.i(TAG, "[BLE] ACTION_WRITE_READY recebido — canal autenticado (READY). "
-                            + "Aguardando " + ML_SEND_DELAY_MS + "ms antes de enviar $ML.");
+                    Log.i(TAG, "[BLE] ACTION_WRITE_READY — canal autenticado (READY). "
+                            + "Aguardando " + ML_SEND_DELAY_MS + "ms antes de enfileirar $ML.");
                     atualizarStatus("✓ Dispositivo autenticado. Liberando...");
 
                     mMainHandler.postDelayed(() -> {
                         if (mComandoEnviado) {
-                            // Reconexão após queda: já enviou antes, reenviar restante
-                            int restante = qtd_ml - liberado;
-                            if (restante > 0 && !mLiberacaoFinalizada) {
-                                Log.i(TAG, "[BLE] Reconexão detectada — reenviando restante: "
-                                        + restante + "ml (liberado=" + liberado + "ml)");
-                                mComandoEnviado = false; // Permite reenvio do restante
-                                enviarComandoML(restante);
-                            } else {
-                                Log.i(TAG, "[BLE] DUPLICAÇÃO BLOQUEADA: $ML já foi enviado "
-                                        + "e liberado=" + liberado + "ml >= qtd_ml=" + qtd_ml + "ml");
-                            }
+                            // Reconexão após queda: CommandQueueManager já preservou o comando ativo
+                            // e chamará onBleReady() automaticamente para reenvio
+                            Log.i(TAG, "[QUEUE] Reconexão detectada — CommandQueueManager retomará fila automaticamente");
                         } else {
-                            enviarComandoML(qtd_ml);
+                            // Primeira vez: chamar start_sale e depois enfileirar
+                            iniciarVendaEEnfileirar();
                         }
                     }, ML_SEND_DELAY_MS);
                     break;
 
+                // ─────────────────────────────────────────────────────────────
+                // STATUS DE CONEXÃO
+                // ─────────────────────────────────────────────────────────────
                 case BluetoothService.ACTION_CONNECTION_STATUS:
                     String status = intent.getStringExtra(BluetoothService.EXTRA_STATUS);
                     if ("disconnected".equals(status)) {
-                        // FIX-2: exibir label "Reconectando..." ao desconectar
                         Log.w(TAG, "[BLE] Dispositivo DESCONECTADO durante liberação");
                         atualizarStatus("🔄 Reconectando ao dispositivo...");
                         cancelarWatchdog();
-                        // BluetoothService fará a reconexão automaticamente (mAutoReconnect=true).
-                        // Quando reconectar e AUTH:OK chegar, ACTION_WRITE_READY será emitido
-                        // novamente — o bloco acima verificará liberado < qtd_ml.
+                        // CommandQueueManager.onBleDisconnected() já foi chamado pelo BluetoothService
                         runOnUiThread(() -> {
-                            // Mostrar botão "Continuar servindo" durante reconexão
-                            // para que o usuário saiba que pode retomar
                             if (liberado > 0 && liberado < qtd_ml && !mLiberacaoFinalizada) {
                                 int restante = qtd_ml - liberado;
                                 btnLiberar.setText("Aguardando reconexão... (" + restante + "ml restantes)");
@@ -249,63 +211,57 @@ public class PagamentoConcluido extends AppCompatActivity {
                     } else if ("connected".equals(status)) {
                         Log.i(TAG, "[BLE] Conectado — aguardando autenticação BLE (AUTH:OK)...");
                         atualizarStatus("⏳ Autenticando dispositivo...");
-                        // Reabilitar botão se estava desabilitado durante reconexão
                         runOnUiThread(() -> btnLiberar.setEnabled(true));
                     }
                     break;
 
+                // ─────────────────────────────────────────────────────────────
+                // ESTADO BLE MUDOU
+                // ─────────────────────────────────────────────────────────────
                 case BluetoothService.ACTION_BLE_STATE_CHANGED:
                     String stateName = intent.getStringExtra(BluetoothService.EXTRA_BLE_STATE);
                     Log.d(TAG, "[BLE] Estado BLE: " + stateName);
                     break;
 
+                // ─────────────────────────────────────────────────────────────
+                // DADOS DO ESP32 / FILA
+                // ─────────────────────────────────────────────────────────────
                 case BluetoothService.ACTION_DATA_AVAILABLE:
                     String data = intent.getStringExtra(BluetoothService.EXTRA_DATA);
-                    if (data != null) processarMensagemESP32(data.trim());
+                    if (data != null) processarMensagem(data.trim());
                     break;
             }
         }
     };
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Processamento de mensagens do ESP32
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    // Processamento de mensagens (ESP32 direto + fila)
+    // ═════════════════════════════════════════════════════════════════════════
 
-    private void processarMensagemESP32(String msg) {
+    private void processarMensagem(String msg) {
         Log.d(TAG, "[ESP32→Android] " + msg);
 
-        // AUTH:OK — ESP32 concluiu o pareamento. BluetoothService já transitou
-        // para READY e emitiu ACTION_WRITE_READY. Apenas atualizamos o status aqui.
-        if ("AUTH:OK".equalsIgnoreCase(msg)) {
-            Log.i(TAG, "[BLE] AUTH:OK — dispositivo autenticado e pronto");
-            atualizarStatus("✓ Dispositivo autenticado");
-            // $ML será enviado via ACTION_WRITE_READY (já tratado acima)
+        // ── Mensagens da fila de comandos (prefixo QUEUE:) ────────────────────
+        if (msg.startsWith("QUEUE:")) {
+            processarMensagemFila(msg);
             return;
         }
 
-        // AUTH:FAIL — falha de autenticação, logar mas não travar o fluxo
+        // ── AUTH:OK — apenas informativo (ACTION_WRITE_READY já cuida do fluxo) ─
+        if ("AUTH:OK".equalsIgnoreCase(msg)) {
+            Log.i(TAG, "[BLE] AUTH:OK — dispositivo autenticado e pronto");
+            atualizarStatus("✓ Dispositivo autenticado");
+            return;
+        }
+
+        // ── AUTH:FAIL ─────────────────────────────────────────────────────────
         if ("AUTH:FAIL".equalsIgnoreCase(msg)) {
             Log.w(TAG, "[BLE] AUTH:FAIL recebido — aguardando nova tentativa automática");
             atualizarStatus("⚠ Falha de autenticação. Reconectando...");
             return;
         }
 
-        // OK — válvula aberta
-        if ("OK".equalsIgnoreCase(msg)) {
-            Log.i(TAG, "[BLE] OK — válvula ABERTA. Iniciando watchdog (" + WATCHDOG_TIMEOUT_MS / 1000 + "s)");
-            // ── DIAGNÓSTICO: cancela timeout de resposta BLE (OK recebido com sucesso) ──
-            cancelarTimeoutRespostaBLE();
-            mBleRetryCount = 0;
-            Log.i(TAG, "[DIAG] OK recebido — timeout BLE cancelado, retry zerado");
-            mValvulaAberta = true;
-            atualizarStatus("🍺 Servindo...");
-            // Esconder botão "Continuar servindo" enquanto está servindo
-            runOnUiThread(() -> btnLiberar.setVisibility(View.GONE));
-            iniciarWatchdog();
-            return;
-        }
-
-        // VP:<float> — volume parcial (ml servidos até agora)
+        // ── VP:<float> — progresso parcial de dispensação ────────────────────
         if (msg.startsWith("VP:")) {
             resetarWatchdog();
             try {
@@ -317,7 +273,6 @@ public class PagamentoConcluido extends AppCompatActivity {
                         int progresso = (int) ((liberado / (float) qtd_ml) * 100);
                         progressBar.setProgress(Math.min(progresso, 100));
                     }
-                    // Esconder botão enquanto está servindo ativamente
                     btnLiberar.setVisibility(View.GONE);
                 });
             } catch (Exception e) {
@@ -326,7 +281,7 @@ public class PagamentoConcluido extends AppCompatActivity {
             return;
         }
 
-        // QP:<int> — total de pulsos do sensor de fluxo
+        // ── QP:<int> — total de pulsos do sensor de fluxo ────────────────────
         if (msg.startsWith("QP:")) {
             try {
                 totalPulsos = Integer.parseInt(msg.substring(3).trim());
@@ -335,18 +290,33 @@ public class PagamentoConcluido extends AppCompatActivity {
             return;
         }
 
-        // ML: ou ML:<valor> — válvula fechada, liberação concluída
-        // FIX-3: reorganizado para garantir exibição do botão "Continuar servindo"
-        // FIX-5: confirmado que válvula é fechada pelo ESP32 ao enviar ML:
-        // FIX-6: navegar para Home após dosagem completa
+        // ── VALVE:OPEN — válvula aberta (informativo) ─────────────────────────
+        if ("VALVE:OPEN".equalsIgnoreCase(msg)) {
+            Log.i(TAG, "[BLE] VALVE:OPEN — válvula aberta. Iniciando watchdog.");
+            mValvulaAberta = true;
+            atualizarStatus("🍺 Servindo...");
+            runOnUiThread(() -> btnLiberar.setVisibility(View.GONE));
+            iniciarWatchdog();
+            return;
+        }
+
+        // ── OK — válvula aberta (protocolo legado) ────────────────────────────
+        if ("OK".equalsIgnoreCase(msg)) {
+            Log.i(TAG, "[BLE] OK — válvula ABERTA (legado). Iniciando watchdog.");
+            mValvulaAberta = true;
+            atualizarStatus("🍺 Servindo...");
+            runOnUiThread(() -> btnLiberar.setVisibility(View.GONE));
+            iniciarWatchdog();
+            return;
+        }
+
+        // ── ML: ou ML:<valor> — válvula fechada (protocolo legado) ───────────
+        // NOTA: com a fila, o fluxo principal usa DONE. ML: é tratado como fallback.
         if (msg.startsWith("ML:") || "ML".equalsIgnoreCase(msg)) {
+            Log.i(TAG, "[BLE] ML recebido (legado) — válvula FECHADA. liberado=" + liberado + "ml");
             cancelarWatchdog();
             mValvulaAberta  = false;
-            mComandoEnviado = false; // Permite novo envio se usuário pressionar "Continuar"
-            Log.i(TAG, "[BLE] " + msg + " — válvula FECHADA pelo ESP32. liberado=" + liberado + "ml de " + qtd_ml + "ml");
-            Log.i(TAG, "[APP] Operação concluída — liberado=" + liberado + "ml de " + qtd_ml + "ml solicitados");
 
-            // Tentar parsear o valor final de ML:<valor> se disponível
             if (msg.startsWith("ML:") && msg.length() > 3) {
                 try {
                     double mlFinal = Double.parseDouble(msg.substring(3).trim());
@@ -354,70 +324,26 @@ public class PagamentoConcluido extends AppCompatActivity {
                 } catch (Exception ignored) {}
             }
 
+            // Se a fila não finalizou ainda, tratar como DONE
             if (!mLiberacaoFinalizada) {
                 mLiberacaoFinalizada = true;
-                sendRequestFim(String.valueOf(liberado), checkout_id);
+                mComandoEnviado = false;
+                Log.i(TAG, "[PAYMENT] ML legado → chamando finish_sale (liberado=" + liberado + "ml)");
+                chamarFinishSale(liberado);
             }
-
-            // FIX-3: bloco runOnUiThread completo e sem truncamento
-            final int liberadoFinal = liberado;
-            runOnUiThread(() -> {
-                txtMls.setText(liberadoFinal + " ML");
-
-                if (progressBar != null && qtd_ml > 0) {
-                    int progresso = (int) ((liberadoFinal / (float) qtd_ml) * 100);
-                    progressBar.setProgress(Math.min(progresso, 100));
-                }
-
-                if (liberadoFinal < qtd_ml) {
-                    // Dosagem incompleta — mostrar botão "Continuar servindo"
-                    int restante = qtd_ml - liberadoFinal;
-                    Log.i(TAG, "[APP] Dosagem incompleta: " + liberadoFinal + "ml de " + qtd_ml
-                            + "ml. Exibindo botão 'Continuar servindo (" + restante + "ml)'");
-                    atualizarStatus("⚠ Fluxo interrompido. " + restante + "ml restantes.");
-                    btnLiberar.setText("Continuar servindo (" + restante + "ml)");
-                    btnLiberar.setEnabled(true);
-                    btnLiberar.setVisibility(View.VISIBLE);
-                    mLiberacaoFinalizada = false;
-                } else {
-                    // FIX-6: dosagem completa → navegar para Home após 3s
-                    Log.i(TAG, "[APP] Dosagem completa! Navegando para Home em "
-                            + HOME_NAVIGATE_DELAY_MS / 1000 + "s...");
-                    atualizarStatus("✓ Dosagem completa! Obrigado!");
-                    btnLiberar.setVisibility(View.GONE);
-
-                    mMainHandler.postDelayed(() -> {
-                        if (!isFinishing() && !isDestroyed()) {
-                            Log.i(TAG, "[APP] Navegando para Home.java");
-                            Intent intent = new Intent(PagamentoConcluido.this, Home.class);
-                            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
-                                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                            startActivity(intent);
-                            finish();
-                        }
-                    }, HOME_NAVIGATE_DELAY_MS);
-                }
-            });
             return;
         }
 
-        // ERROR:NOT_AUTHENTICATED — ESP32 recebeu $ML sem autenticação prévia.
-        // Isso NÃO deveria ocorrer com a máquina de estados correta, mas tratamos
-        // como fallback de segurança: remover bond e forçar novo pareamento.
+        // ── ERROR:NOT_AUTHENTICATED ───────────────────────────────────────────
         if (msg.contains("ERROR:NOT_AUTHEN")) {
             cancelarWatchdog();
             Log.e(TAG, "[BLE] ERROR:NOT_AUTHENTICATED recebido do ESP32");
-            Log.e(TAG, "[BLE] ATENÇÃO: $ML foi enviado antes de AUTH:OK. Verifique a máquina de estados.");
-            Log.e(TAG, "[BLE] Ação: removendo bond e reconectando para forçar novo pareamento com PIN 259087.");
             atualizarStatus("🔑 Reautenticando dispositivo...");
-            mComandoEnviado = false; // Permite reenvio após nova autenticação
+            mComandoEnviado = false;
 
             if (mBluetoothService != null) {
                 android.bluetooth.BluetoothDevice dev = mBluetoothService.getBoundDevice();
-                if (dev != null) {
-                    BluetoothService.removeBond(dev);
-                    Log.i(TAG, "[BLE] Bond removido para " + dev.getAddress());
-                }
+                if (dev != null) BluetoothService.removeBond(dev);
                 mBluetoothService.disconnect();
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     if (mBluetoothService != null) {
@@ -429,7 +355,7 @@ public class PagamentoConcluido extends AppCompatActivity {
             return;
         }
 
-        // ERRO — erro genérico do firmware
+        // ── ERRO genérico ─────────────────────────────────────────────────────
         if ("ERRO".equalsIgnoreCase(msg) || msg.startsWith("ERRO")) {
             cancelarWatchdog();
             Log.e(TAG, "[BLE] Erro reportado pelo ESP32: " + msg);
@@ -438,131 +364,179 @@ public class PagamentoConcluido extends AppCompatActivity {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Envio do comando $ML
-    // ─────────────────────────────────────────────────────────────────────────
+    /**
+     * Processa mensagens da fila de comandos (prefixo QUEUE:).
+     *
+     * Formatos:
+     *   QUEUE:ACK:<cmdId>
+     *   QUEUE:DONE:<cmdId>:<mlReal>
+     *   QUEUE:ERROR:<cmdId>:<motivo>
+     */
+    private void processarMensagemFila(String msg) {
+        String[] parts = msg.split(":", 4);
+        if (parts.length < 2) return;
+
+        String tipo = parts[1]; // ACK, DONE, ERROR
+
+        switch (tipo) {
+            case "ACK":
+                // ── QUEUE:ACK:<cmdId> ─────────────────────────────────────────
+                String ackId = parts.length >= 3 ? parts[2] : "?";
+                Log.i(TAG, "[QUEUE] ACK recebido para cmdId=" + ackId);
+                atualizarStatus("🍺 Servindo... (ACK confirmado)");
+                // Inicia watchdog — se VP: não chegar, algo errou
+                iniciarWatchdog();
+                break;
+
+            case "DONE":
+                // ── QUEUE:DONE:<cmdId>:<mlReal> ───────────────────────────────
+                String doneId = parts.length >= 3 ? parts[2] : "?";
+                int mlReal = 0;
+                if (parts.length >= 4) {
+                    try { mlReal = Integer.parseInt(parts[3]); } catch (Exception ignored) {}
+                }
+                Log.i(TAG, "[QUEUE] DONE recebido — cmdId=" + doneId + " | ml_real=" + mlReal);
+                cancelarWatchdog();
+                mValvulaAberta  = false;
+                mComandoEnviado = false;
+
+                // Atualiza ml liberado com o valor real do ESP32 (se disponível)
+                if (mlReal > 0) liberado = mlReal;
+
+                if (!mLiberacaoFinalizada) {
+                    mLiberacaoFinalizada = true;
+                    Log.i(TAG, "[PAYMENT] DONE → chamando finish_sale (liberado=" + liberado + "ml)");
+                    chamarFinishSale(liberado);
+                }
+
+                // Atualiza UI
+                final int liberadoFinal = liberado;
+                runOnUiThread(() -> {
+                    txtMls.setText(liberadoFinal + " ML");
+                    if (progressBar != null && qtd_ml > 0) {
+                        int progresso = (int) ((liberadoFinal / (float) qtd_ml) * 100);
+                        progressBar.setProgress(Math.min(progresso, 100));
+                    }
+
+                    if (liberadoFinal < qtd_ml) {
+                        // Dosagem incompleta — mostrar botão "Continuar servindo"
+                        int restante = qtd_ml - liberadoFinal;
+                        Log.i(TAG, "[APP] Dosagem incompleta: " + liberadoFinal + "ml de " + qtd_ml
+                                + "ml. Exibindo botão 'Continuar servindo (" + restante + "ml)'");
+                        atualizarStatus("⚠ Fluxo interrompido. " + restante + "ml restantes.");
+                        btnLiberar.setText("Continuar servindo (" + restante + "ml)");
+                        btnLiberar.setEnabled(true);
+                        btnLiberar.setVisibility(View.VISIBLE);
+                        mLiberacaoFinalizada = false;
+                    } else {
+                        // FIX-6: dosagem completa → navegar para Home após 3s
+                        Log.i(TAG, "[APP] Dosagem completa! Navegando para Home em "
+                                + HOME_NAVIGATE_DELAY_MS / 1000 + "s...");
+                        atualizarStatus("✓ Dosagem completa! Obrigado!");
+                        btnLiberar.setVisibility(View.GONE);
+
+                        mMainHandler.postDelayed(() -> {
+                            if (!isFinishing() && !isDestroyed()) {
+                                Log.i(TAG, "[APP] Navegando para Home.java");
+                                Intent intent = new Intent(PagamentoConcluido.this, Home.class);
+                                intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                        | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                                startActivity(intent);
+                                finish();
+                            }
+                        }, HOME_NAVIGATE_DELAY_MS);
+                    }
+                });
+                break;
+
+            case "ERROR":
+                // ── QUEUE:ERROR:<cmdId>:<motivo> ──────────────────────────────
+                String errorId     = parts.length >= 3 ? parts[2] : "?";
+                String errorMotivo = parts.length >= 4 ? parts[3] : "desconhecido";
+                Log.e(TAG, "[QUEUE] ERROR — cmdId=" + errorId + " | motivo=" + errorMotivo);
+                cancelarWatchdog();
+                mComandoEnviado = false;
+                mLiberacaoFinalizada = true;
+
+                // Chama fail_sale para registrar a falha no ERP
+                Log.i(TAG, "[PAYMENT] QUEUE:ERROR → chamando fail_sale");
+                chamarFailSale(errorMotivo);
+
+                atualizarStatus("❌ Falha na dispensação: " + errorMotivo);
+                runOnUiThread(() -> {
+                    int restante = qtd_ml - liberado;
+                    if (restante > 0) {
+                        btnLiberar.setText("Tentar novamente (" + restante + "ml)");
+                        btnLiberar.setEnabled(true);
+                        btnLiberar.setVisibility(View.VISIBLE);
+                        mLiberacaoFinalizada = false;
+                    }
+                    mostrarSnackbar("Falha na dispensação. Tente novamente.");
+                });
+                break;
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Fluxo principal: start_sale → enfileirar → DONE → finish_sale
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Envia o comando $ML:<volumeMl> para o ESP32.
-     *
-     * PRÉ-CONDIÇÃO: só deve ser chamado após ACTION_WRITE_READY,
-     * que garante que o estado BLE é READY (AUTH:OK já recebido).
+     * Chama start_sale.php e, em caso de sucesso, enfileira o BleCommand SERVE.
+     * Chamado após ACTION_WRITE_READY (BLE está READY).
      */
-    // ─────────────────────────────────────────────────────────────────────
-    // Timeout de segurança BLE: se ESP32 não responder com OK em 5s, reenviar
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private void iniciarTimeoutRespostaBLE(int volumeMl) {
-        cancelarTimeoutRespostaBLE();
-        Log.d(TAG, "[DIAG] Iniciando timeout de resposta BLE (" + BLE_RESPONSE_TIMEOUT_MS / 1000 + "s) — aguardando OK do ESP32");
-        mBleResponseTimeoutRunnable = () -> {
-            if (mValvulaAberta || mLiberacaoFinalizada) {
-                Log.d(TAG, "[DIAG] Timeout BLE cancelado — válvula já aberta ou liberação finalizada");
-                return;
-            }
-            mBleRetryCount++;
-            Log.e(TAG, "[DIAG] *** TIMEOUT BLE *** ESP32 não respondeu com OK em "
-                    + BLE_RESPONSE_TIMEOUT_MS / 1000 + "s. Tentativa " + mBleRetryCount + "/" + BLE_MAX_RETRIES);
-
-            // Diagnóstico do estado atual
-            if (mBluetoothService != null) {
-                Log.e(TAG, "[DIAG] Estado BLE: " + mBluetoothService.getBleState().name()
-                        + " | isReady=" + mBluetoothService.isReady()
-                        + " | connected=" + mBluetoothService.connected());
-                android.bluetooth.BluetoothDevice dev = mBluetoothService.getBoundDevice();
-                if (dev != null) {
-                    Log.e(TAG, "[DIAG] Device: " + dev.getAddress()
-                            + " | bond=" + dev.getBondState());
-                }
-            } else {
-                Log.e(TAG, "[DIAG] BluetoothService é NULO — serviço desconectado!");
-            }
-
-            if (mBleRetryCount <= BLE_MAX_RETRIES) {
-                if (mBluetoothService != null && mBluetoothService.isReady()) {
-                    Log.w(TAG, "[DIAG] Reenviando $ML:" + volumeMl + " (retry " + mBleRetryCount + ")");
-                    atualizarStatus("⚠ Sem resposta do ESP32. Reenviando comando... (" + mBleRetryCount + "/" + BLE_MAX_RETRIES + ")");
-                    mComandoEnviado = false;
-                    enviarComandoML(volumeMl);
-                } else {
-                    Log.e(TAG, "[DIAG] BLE não está READY para reenvio — aguardando reconexão");
-                    atualizarStatus("⚠ Aguardando reconexão com o dispositivo...");
-                    // O ACTION_WRITE_READY cuidará do reenvio quando reconectar
-                }
-            } else {
-                Log.e(TAG, "[DIAG] Máximo de retries (" + BLE_MAX_RETRIES + ") atingido — exibindo botão manual");
-                atualizarStatus("❌ Sem resposta do ESP32 após " + BLE_MAX_RETRIES + " tentativas.");
-                runOnUiThread(() -> {
-                    btnLiberar.setText("Tentar novamente (" + volumeMl + "ml)");
-                    btnLiberar.setEnabled(true);
-                    btnLiberar.setVisibility(View.VISIBLE);
-                });
-                mBleRetryCount = 0;
-                mComandoEnviado = false;
-            }
-        };
-        mMainHandler.postDelayed(mBleResponseTimeoutRunnable, BLE_RESPONSE_TIMEOUT_MS);
-    }
-
-    private void cancelarTimeoutRespostaBLE() {
-        if (mBleResponseTimeoutRunnable != null) {
-            mMainHandler.removeCallbacks(mBleResponseTimeoutRunnable);
-            mBleResponseTimeoutRunnable = null;
-            Log.d(TAG, "[DIAG] Timeout resposta BLE cancelado");
-        }
-    }
-
-    private void enviarComandoML(int volumeMl) {
-        if (mBluetoothService == null) {
-            Log.e(TAG, "[BLE] enviarComandoML(" + volumeMl + ") — BluetoothService nulo!");
-            return;
-        }
-        if (!mBluetoothService.isReady()) {
-            Log.e(TAG, "[BLE] enviarComandoML(" + volumeMl + ") BLOQUEADO — estado="
-                    + mBluetoothService.getBleState().name()
-                    + ". Aguardar AUTH:OK antes de enviar $ML!");
-            return;
-        }
+    private void iniciarVendaEEnfileirar() {
         if (mComandoEnviado) {
-            Log.w(TAG, "[BLE] DUPLICAÇÃO BLOQUEADA: $ML já foi enviado (mComandoEnviado=true).");
+            Log.w(TAG, "[PAYMENT] iniciarVendaEEnfileirar() BLOQUEADO — mComandoEnviado=true");
             return;
         }
-        mComandoEnviado = true;
-        mlsSolicitado   = volumeMl;
-        String cmd = "$ML:" + volumeMl;
-
-        // ── DIAGNÓSTICO: log detalhado do estado antes do envio ──────────────
-        Log.i(TAG, "[DIAG] ════════════════════════════════════════════════");
-        Log.i(TAG, "[DIAG] ENVIANDO $ML — diagnóstico completo:");
-        Log.i(TAG, "[DIAG]   comando    = " + cmd);
-        Log.i(TAG, "[DIAG]   bleState   = " + mBluetoothService.getBleState().name());
-        Log.i(TAG, "[DIAG]   isReady    = " + mBluetoothService.isReady());
-        Log.i(TAG, "[DIAG]   connected  = " + mBluetoothService.connected());
-        Log.i(TAG, "[DIAG]   targetMac  = " + mBluetoothService.getTargetMac());
-        android.bluetooth.BluetoothDevice devDiag = mBluetoothService.getBoundDevice();
-        if (devDiag != null) {
-            Log.i(TAG, "[DIAG]   device     = " + devDiag.getAddress()
-                    + " | bond=" + devDiag.getBondState());
-        } else {
-            Log.w(TAG, "[DIAG]   device     = NULL (GATT nulo)");
+        if (mBluetoothService == null || !mBluetoothService.isReady()) {
+            Log.e(TAG, "[PAYMENT] iniciarVendaEEnfileirar() BLOQUEADO — BLE não está READY");
+            return;
         }
-        Log.i(TAG, "[DIAG]   qtd_ml     = " + qtd_ml);
-        Log.i(TAG, "[DIAG]   liberado   = " + liberado);
-        Log.i(TAG, "[DIAG]   retryCount = " + mBleRetryCount);
-        Log.i(TAG, "[DIAG] ════════════════════════════════════════════════");
 
-        atualizarStatus("⏳ Aguardando abertura da válvula...");
-        mBluetoothService.write(cmd);
-        Log.i(TAG, "[BLE] Aguardando confirmação OK do ESP32...");
+        Log.i(TAG, "[PAYMENT] Iniciando venda — checkout_id=" + checkout_id
+                + " | qtd_ml=" + qtd_ml);
 
-        // ── DIAGNÓSTICO: inicia timeout de segurança BLE ─────────────────────
-        // Se o ESP32 não responder com OK em BLE_RESPONSE_TIMEOUT_MS, reenviar
-        iniciarTimeoutRespostaBLE(volumeMl);
+        // Chama start_sale.php antes de enfileirar
+        chamarStartSale(checkout_id, qtd_ml, android_id, () -> {
+            // Callback de sucesso: enfileirar o comando BLE
+            enfileirarComandoServe(qtd_ml);
+        });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    /**
+     * Enfileira um BleCommand SERVE via CommandQueueManager.
+     * Deve ser chamado APÓS start_sale.php retornar sucesso.
+     */
+    private void enfileirarComandoServe(int volumeMl) {
+        if (mBluetoothService == null) {
+            Log.e(TAG, "[QUEUE] enfileirarComandoServe() — BluetoothService nulo!");
+            return;
+        }
+
+        CommandQueueManager queue = mBluetoothService.getCommandQueue();
+        if (queue == null) {
+            Log.e(TAG, "[QUEUE] CommandQueueManager nulo — usando envio direto como fallback");
+            // Fallback: envio direto (compatibilidade)
+            mComandoEnviado = true;
+            mBluetoothService.write("$ML:" + volumeMl);
+            return;
+        }
+
+        mComandoEnviado = true;
+        BleCommand cmd = queue.enqueueServe(volumeMl);
+        mActiveCommandId = cmd.commandId;
+        mActiveSessionId = cmd.sessionId;
+
+        Log.i(TAG, "[QUEUE] Comando enfileirado — " + cmd);
+        Log.i(TAG, "[QUEUE] Aguardando ML:ACK (10s) e DONE (60s)...");
+        atualizarStatus("⏳ Aguardando abertura da válvula...");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
     // ServiceConnection
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
 
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
         @Override
@@ -570,7 +544,6 @@ public class PagamentoConcluido extends AppCompatActivity {
             mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
             mIsServiceBound   = true;
 
-            // ── DEBUG COMPLETO DO ESTADO AO VINCULAR ──────────────────────────
             android.bluetooth.BluetoothDevice devDebug = mBluetoothService.getBoundDevice();
             String bondDebug = (devDebug != null)
                     ? (devDebug.getAddress() + " bondState="
@@ -583,15 +556,13 @@ public class PagamentoConcluido extends AppCompatActivity {
                     + " | isReady=" + mBluetoothService.isReady()
                     + " | connected=" + mBluetoothService.connected()
                     + " | " + bondDebug);
-            // ─────────────────────────────────────────────────────────────────
 
             if (mBluetoothService.isReady()) {
-                // FIX-1: aguardar ML_SEND_DELAY_MS antes de enviar $ML
-                // para evitar válvula abrindo/fechando rapidamente ao entrar na tela
+                // FIX-1: aguardar ML_SEND_DELAY_MS antes de enfileirar
                 Log.i(TAG, "[BLE] → CAMINHO 1: já em READY. Aguardando " + ML_SEND_DELAY_MS
-                        + "ms antes de enviar $ML (FIX-1: evitar abertura/fechamento rápido).");
+                        + "ms antes de enfileirar $ML (FIX-1).");
                 atualizarStatus("✓ Dispositivo pronto. Liberando...");
-                mMainHandler.postDelayed(() -> enviarComandoML(qtd_ml), ML_SEND_DELAY_MS);
+                mMainHandler.postDelayed(() -> iniciarVendaEEnfileirar(), ML_SEND_DELAY_MS);
 
             } else if (mBluetoothService.connected()) {
                 android.bluetooth.BluetoothDevice dev = mBluetoothService.getBoundDevice();
@@ -608,12 +579,11 @@ public class PagamentoConcluido extends AppCompatActivity {
                     Log.i(TAG, "[BLE] → CAMINHO 2A: BOND_BONDED → forceReady() → aguardar ACTION_WRITE_READY");
                     atualizarStatus("✓ Dispositivo autenticado. Liberando...");
                     mBluetoothService.forceReady();
-                    // ACTION_WRITE_READY será emitido pelo forceReady() e tratado no receiver
                 } else if (bonding) {
-                    Log.i(TAG, "[BLE] → CAMINHO 2B: BOND_BONDING em andamento. Aguardando AUTH:OK + fallback.");
+                    Log.i(TAG, "[BLE] → CAMINHO 2B: BOND_BONDING em andamento. Aguardando AUTH:OK.");
                     atualizarStatus("⏳ Autenticando dispositivo...");
                 } else {
-                    Log.i(TAG, "[BLE] → CAMINHO 2C: BOND_NONE. Aguardando AUTH:OK + fallback do BluetoothService.");
+                    Log.i(TAG, "[BLE] → CAMINHO 2C: BOND_NONE. Aguardando AUTH:OK.");
                     atualizarStatus("⏳ Autenticando dispositivo...");
                 }
 
@@ -631,9 +601,9 @@ public class PagamentoConcluido extends AppCompatActivity {
         }
     };
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
     // Ciclo de vida da Activity
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -649,10 +619,9 @@ public class PagamentoConcluido extends AppCompatActivity {
 
         qtd_ml      = Integer.parseInt(extras.get("qtd_ml").toString());
         checkout_id = extras.get("checkout_id").toString();
-        // FIX-4: receber URL da imagem via Intent para fallback de download
         imagemUrl   = extras.containsKey("imagem_url") ? extras.getString("imagem_url") : null;
 
-        Log.i(TAG, "[APP] PagamentoConcluido iniciado — qtd_ml=" + qtd_ml
+        Log.i(TAG, "[PAYMENT] PagamentoConcluido iniciado — qtd_ml=" + qtd_ml
                 + " | checkout_id=" + checkout_id
                 + " | imagemUrl=" + imagemUrl);
 
@@ -667,7 +636,6 @@ public class PagamentoConcluido extends AppCompatActivity {
         txtMls.setText("0 ML");
         atualizarStatus("⏳ Conectando ao dispositivo...");
 
-        // Botão oculto inicialmente — só aparece após interrupção parcial (FIX-3)
         btnLiberar.setVisibility(View.GONE);
 
         if (progressBar != null) {
@@ -678,8 +646,6 @@ public class PagamentoConcluido extends AppCompatActivity {
 
         // FIX-4: carregar imagem — tenta banco local primeiro, depois URL
         carregarImagemComFallback();
-
-        sendRequestInicio(checkout_id);
 
         // Inicia e vincula o BluetoothService
         Log.i(TAG, "[BLE] Iniciando BluetoothService...");
@@ -696,12 +662,13 @@ public class PagamentoConcluido extends AppCompatActivity {
             }
             int restante = qtd_ml - liberado;
             if (restante <= 0) return;
-            Log.i(TAG, "[APP] Usuário solicitou liberação do restante: " + restante + "ml");
+            Log.i(TAG, "[PAYMENT] Usuário solicitou liberação do restante: " + restante + "ml");
             btnLiberar.setVisibility(View.GONE);
             mLiberacaoFinalizada = false;
             mComandoEnviado      = false; // Autorizado explicitamente pelo usuário
             if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
-            enviarComandoML(restante);
+            // Re-inicia o fluxo com o volume restante
+            iniciarVendaEEnfileirar();
         });
 
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
@@ -734,7 +701,6 @@ public class PagamentoConcluido extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         cancelarWatchdog();
-        cancelarTimeoutRespostaBLE();
         mMainHandler.removeCallbacksAndMessages(null);
         if (currentImageTask != null) currentImageTask.cancel(true);
         imageExecutor.shutdown();
@@ -744,9 +710,160 @@ public class PagamentoConcluido extends AppCompatActivity {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    // Chamadas à API de controle de vendas
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Registra o início da venda no ERP.
+     * Endpoint: api/start_sale.php
+     *
+     * @param checkoutId  ID do checkout
+     * @param volumeMl    Volume solicitado em ml
+     * @param deviceId    android_id do tablet
+     * @param onSuccess   Callback chamado em caso de sucesso (HTTP 200)
+     */
+    private void chamarStartSale(String checkoutId, int volumeMl, String deviceId,
+                                  Runnable onSuccess) {
+        Log.i(TAG, "[API] start_sale → checkout_id=" + checkoutId
+                + " | volume_ml=" + volumeMl + " | device_id=" + deviceId
+                + " | command_id=" + mActiveCommandId + " | session_id=" + mActiveSessionId);
+
+        Map<String, String> body = new HashMap<>();
+        body.put("checkout_id", checkoutId);
+        body.put("volume_ml",   String.valueOf(volumeMl));
+        body.put("qtd_ml",      String.valueOf(volumeMl));
+        body.put("device_id",   deviceId);
+        body.put("android_id",  deviceId);
+        if (mActiveCommandId != null) body.put("command_id", mActiveCommandId);
+        if (mActiveSessionId != null) body.put("session_id", mActiveSessionId);
+
+        new ApiHelper().sendPost(body, "api/start_sale.php", new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.w(TAG, "[API] start_sale FALHOU (rede): " + e.getMessage()
+                        + " — prosseguindo com enfileiramento mesmo assim");
+                // Não bloquear o fluxo por falha de rede — enfileirar mesmo assim
+                if (onSuccess != null) {
+                    mMainHandler.post(onSuccess);
+                }
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                int code = response.code();
+                String body2 = response.body() != null ? response.body().string() : "";
+                response.close();
+                Log.i(TAG, "[API] start_sale HTTP " + code + " | body=" + body2);
+
+                // Enfileirar independente do código (200 ou erro de negócio)
+                if (onSuccess != null) {
+                    mMainHandler.post(onSuccess);
+                }
+            }
+        });
+    }
+
+    /**
+     * Finaliza a venda com sucesso no ERP.
+     * Endpoint: api/finish_sale.php
+     *
+     * @param mlDispensado  Volume real dispensado (do ESP32)
+     */
+    private void chamarFinishSale(int mlDispensado) {
+        Log.i(TAG, "[API] finish_sale → checkout_id=" + checkout_id
+                + " | ml_dispensado=" + mlDispensado
+                + " | total_pulsos=" + totalPulsos
+                + " | command_id=" + mActiveCommandId + " | session_id=" + mActiveSessionId);
+
+        Map<String, String> body = new HashMap<>();
+        body.put("checkout_id",   checkout_id);
+        body.put("ml_dispensado", String.valueOf(mlDispensado));
+        body.put("ml_real",       String.valueOf(mlDispensado));
+        body.put("total_pulsos",  String.valueOf(totalPulsos));
+        body.put("android_id",    android_id);
+        if (mActiveCommandId != null) body.put("command_id", mActiveCommandId);
+        if (mActiveSessionId != null) body.put("session_id", mActiveSessionId);
+
+        new ApiHelper().sendPost(body, "api/finish_sale.php", new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.w(TAG, "[API] finish_sale FALHOU (rede): " + e.getMessage());
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                int code = response.code();
+                String body2 = response.body() != null ? response.body().string() : "";
+                response.close();
+                Log.i(TAG, "[API] finish_sale HTTP " + code + " | body=" + body2);
+            }
+        });
+
+        // Também chama a API legada de liberação finalizada para compatibilidade
+        chamarLiberacaoFinalizada(String.valueOf(mlDispensado), checkout_id);
+    }
+
+    /**
+     * Registra falha na venda no ERP.
+     * Endpoint: api/fail_sale.php
+     *
+     * @param motivo  Descrição do erro
+     */
+    private void chamarFailSale(String motivo) {
+        Log.i(TAG, "[API] fail_sale → checkout_id=" + checkout_id
+                + " | motivo=" + motivo
+                + " | ml_liberado=" + liberado
+                + " | command_id=" + mActiveCommandId + " | session_id=" + mActiveSessionId);
+
+        Map<String, String> body = new HashMap<>();
+        body.put("checkout_id", checkout_id);
+        body.put("motivo",      motivo);
+        body.put("error_msg",   motivo);
+        body.put("ml_liberado", String.valueOf(liberado));
+        body.put("ml_parcial",  String.valueOf(liberado));
+        body.put("android_id",  android_id);
+        if (mActiveCommandId != null) body.put("command_id", mActiveCommandId);
+        if (mActiveSessionId != null) body.put("session_id", mActiveSessionId);
+
+        new ApiHelper().sendPost(body, "api/fail_sale.php", new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.w(TAG, "[API] fail_sale FALHOU (rede): " + e.getMessage());
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                int code = response.code();
+                String body2 = response.body() != null ? response.body().string() : "";
+                response.close();
+                Log.i(TAG, "[API] fail_sale HTTP " + code + " | body=" + body2);
+            }
+        });
+    }
+
+    /** API legada — mantida para compatibilidade com liberacao.php */
+    private void chamarLiberacaoFinalizada(String volume, String checkoutId) {
+        Log.i(TAG, "[API] liberacao finalizada (legado): " + volume + "ml | checkout=" + checkoutId);
+        Map<String, String> body = new HashMap<>();
+        body.put("android_id",   android_id);
+        body.put("qtd_ml",       volume);
+        body.put("checkout_id",  checkoutId);
+        body.put("total_pulsos", String.valueOf(totalPulsos));
+        new ApiHelper().sendPost(body, "liberacao.php?action=finalizada", new Callback() {
+            @Override public void onFailure(Call call, IOException e) {
+                Log.w(TAG, "[API] liberacao finalizada (legado) FALHOU: " + e.getMessage());
+            }
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                Log.i(TAG, "[API] liberacao finalizada (legado) HTTP " + response.code());
+                response.close();
+            }
+        });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
     // Carregamento de imagem (FIX-4)
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
      * FIX-4: Carrega a imagem da bebida com fallback em duas etapas:
@@ -754,7 +871,6 @@ public class PagamentoConcluido extends AppCompatActivity {
      *   2. Se null/vazio, baixa da URL via ApiHelper em background thread
      */
     private void carregarImagemComFallback() {
-        // Etapa 1: banco local
         Sqlite banco = new Sqlite(getApplicationContext());
         byte[] img = banco.getActiveImageData();
         if (img != null && img.length > 0) {
@@ -766,7 +882,6 @@ public class PagamentoConcluido extends AppCompatActivity {
             }
         }
 
-        // Etapa 2: fallback — baixar da URL
         if (imagemUrl == null || imagemUrl.isEmpty()) {
             Log.w(TAG, "[IMG] Banco local vazio e URL não disponível — imagem não carregada");
             return;
@@ -799,9 +914,9 @@ public class PagamentoConcluido extends AppCompatActivity {
         });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
     // Watchdog
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
 
     private void iniciarWatchdog() {
         cancelarWatchdog();
@@ -823,9 +938,9 @@ public class PagamentoConcluido extends AppCompatActivity {
         Log.d(TAG, "[APP] Watchdog cancelado");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
     // UI helpers
-    // ─────────────────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
 
     private void atualizarStatus(String msg) {
         runOnUiThread(() -> { if (txtStatus != null) txtStatus.setText(msg); });
@@ -845,42 +960,5 @@ public class PagamentoConcluido extends AppCompatActivity {
         wic.setSystemBarsBehavior(
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Chamadas à API
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private void sendRequestInicio(String checkoutId) {
-        Map<String, String> body = new HashMap<>();
-        body.put("android_id", android_id);
-        body.put("checkout_id", checkoutId);
-        new ApiHelper().sendPost(body, "liberacao.php?action=iniciada", new Callback() {
-            @Override public void onFailure(Call call, IOException e) {
-                Log.w(TAG, "[API] sendRequestInicio falhou: " + e.getMessage());
-            }
-            @Override public void onResponse(Call call, Response response) throws IOException {
-                Log.d(TAG, "[API] sendRequestInicio HTTP " + response.code());
-                response.close();
-            }
-        });
-    }
-
-    private void sendRequestFim(String volume, String checkoutId) {
-        Log.i(TAG, "[API] Enviando liberacao finalizada: " + volume + "ml | checkout=" + checkoutId);
-        Map<String, String> body = new HashMap<>();
-        body.put("android_id", android_id);
-        body.put("qtd_ml", volume);
-        body.put("checkout_id", checkoutId);
-        body.put("total_pulsos", String.valueOf(totalPulsos));
-        new ApiHelper().sendPost(body, "liberacao.php?action=finalizada", new Callback() {
-            @Override public void onFailure(Call call, IOException e) {
-                Log.w(TAG, "[API] sendRequestFim falhou: " + e.getMessage());
-            }
-            @Override public void onResponse(Call call, Response response) throws IOException {
-                Log.i(TAG, "[API] sendRequestFim HTTP " + response.code() + " — liberação registrada");
-                response.close();
-            }
-        });
     }
 }
