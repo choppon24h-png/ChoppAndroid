@@ -129,11 +129,13 @@ public class PagamentoConcluido extends AppCompatActivity {
     private final ExecutorService imageExecutor = Executors.newSingleThreadExecutor();
     private Future<?> currentImageTask = null;
 
-    // ── Bluetooth ─────────────────────────────────────────────────────────────
+    // ── Bluetooth ────────────────────────────────────────────────────────────────────────────────
     private BluetoothService mBluetoothService;
     private boolean          mIsServiceBound = false;
+    // ── SessionManager v2.3 — anti-fraude com start_session/finish_session ─────────────────
+    private SessionManager   mSessionManager;
 
-    // ═════════════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════════════════
     // Watchdog
     // ═════════════════════════════════════════════════════════════════════════
 
@@ -328,7 +330,10 @@ public class PagamentoConcluido extends AppCompatActivity {
             if (!mLiberacaoFinalizada) {
                 mLiberacaoFinalizada = true;
                 mComandoEnviado = false;
-                Log.i(TAG, "[PAYMENT] ML legado → chamando finish_sale (liberado=" + liberado + "ml)");
+                Log.i(TAG, "[PAYMENT] ML legado → finalizando sessão (liberado=" + liberado + "ml)");
+                if (mSessionManager != null && mSessionManager.isActive()) {
+                    mSessionManager.finishSession(liberado, totalPulsos);
+                }
                 chamarFinishSale(liberado);
             }
             return;
@@ -405,7 +410,12 @@ public class PagamentoConcluido extends AppCompatActivity {
 
                 if (!mLiberacaoFinalizada) {
                     mLiberacaoFinalizada = true;
-                    Log.i(TAG, "[PAYMENT] DONE → chamando finish_sale (liberado=" + liberado + "ml)");
+                    Log.i(TAG, "[PAYMENT] DONE → finalizando sessão (liberado=" + liberado + "ml)");
+                    // Usa SessionManager v2.3 se disponível
+                    if (mSessionManager != null && mSessionManager.isActive()) {
+                        mSessionManager.finishSession(liberado, totalPulsos);
+                    }
+                    // Sempre chama finish_sale legado para compatibilidade
                     chamarFinishSale(liberado);
                 }
 
@@ -438,6 +448,8 @@ public class PagamentoConcluido extends AppCompatActivity {
                         mMainHandler.postDelayed(() -> {
                             if (!isFinishing() && !isDestroyed()) {
                                 Log.i(TAG, "[APP] Navegando para Home.java");
+                                // Reseta SessionManager antes de sair
+                                if (mSessionManager != null) mSessionManager.reset();
                                 Intent intent = new Intent(PagamentoConcluido.this, Home.class);
                                 intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
                                         | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -458,8 +470,11 @@ public class PagamentoConcluido extends AppCompatActivity {
                 mComandoEnviado = false;
                 mLiberacaoFinalizada = true;
 
-                // Chama fail_sale para registrar a falha no ERP
-                Log.i(TAG, "[PAYMENT] QUEUE:ERROR → chamando fail_sale");
+                // Registra falha via SessionManager v2.3 e legado
+                Log.i(TAG, "[PAYMENT] QUEUE:ERROR → registrando falha na sessão");
+                if (mSessionManager != null) {
+                    mSessionManager.failSession(errorMotivo, liberado);
+                }
                 chamarFailSale(errorMotivo);
 
                 atualizarStatus("❌ Falha na dispensação: " + errorMotivo);
@@ -482,8 +497,17 @@ public class PagamentoConcluido extends AppCompatActivity {
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Chama start_sale.php e, em caso de sucesso, enfileira o BleCommand SERVE.
+     * Inicia a sessão via SessionManager v2.3 e enfileira o BleCommand SERVE.
      * Chamado após ACTION_WRITE_READY (BLE está READY).
+     *
+     * Fluxo v2.3:
+     *   1. SessionManager.startSession() → POST /api/start_session.php
+     *   2. onSessionStarted() → enfileirarComandoServe()
+     *   3. QUEUE:DONE → SessionManager.finishSession()
+     *
+     * Fluxo legado (fallback):
+     *   1. chamarStartSale() → POST /api/start_sale.php
+     *   2. enfileirarComandoServe()
      */
     private void iniciarVendaEEnfileirar() {
         if (mComandoEnviado) {
@@ -495,19 +519,24 @@ public class PagamentoConcluido extends AppCompatActivity {
             return;
         }
 
-        Log.i(TAG, "[PAYMENT] Iniciando venda — checkout_id=" + checkout_id
+        Log.i(TAG, "[PAYMENT] Iniciando venda v2.3 — checkout_id=" + checkout_id
                 + " | qtd_ml=" + qtd_ml);
 
-        // Chama start_sale.php antes de enfileirar
-        chamarStartSale(checkout_id, qtd_ml, android_id, () -> {
-            // Callback de sucesso: enfileirar o comando BLE
-            enfileirarComandoServe(qtd_ml);
-        });
+        // ── Usa SessionManager v2.3 se disponível ────────────────────────────────
+        if (mSessionManager != null) {
+            Log.i(TAG, "[SESSION] Iniciando sessão via SessionManager v2.3");
+            mSessionManager.startSession(checkout_id, qtd_ml, android_id);
+            // O enfileiramento ocorrerá no callback onSessionStarted()
+        } else {
+            // Fallback: fluxo legado com start_sale.php
+            Log.w(TAG, "[PAYMENT] SessionManager não disponível — usando fluxo legado");
+            chamarStartSale(checkout_id, qtd_ml, android_id, () -> enfileirarComandoServe(qtd_ml));
+        }
     }
 
     /**
      * Enfileira um BleCommand SERVE via CommandQueueManager.
-     * Deve ser chamado APÓS start_sale.php retornar sucesso.
+     * Deve ser chamado APÓS start_session/start_sale retornar sucesso.
      */
     private void enfileirarComandoServe(int volumeMl) {
         if (mBluetoothService == null) {
@@ -518,7 +547,6 @@ public class PagamentoConcluido extends AppCompatActivity {
         CommandQueueManager queue = mBluetoothService.getCommandQueue();
         if (queue == null) {
             Log.e(TAG, "[QUEUE] CommandQueueManager nulo — usando envio direto como fallback");
-            // Fallback: envio direto (compatibilidade)
             mComandoEnviado = true;
             mBluetoothService.write("$ML:" + volumeMl);
             return;
@@ -527,9 +555,13 @@ public class PagamentoConcluido extends AppCompatActivity {
         mComandoEnviado = true;
         BleCommand cmd = queue.enqueueServe(volumeMl);
         mActiveCommandId = cmd.commandId;
-        mActiveSessionId = cmd.sessionId;
+        // Usa session_id do SessionManager v2.3 se disponível, senão usa o do BleCommand
+        if (mActiveSessionId == null) mActiveSessionId = cmd.sessionId;
+        // Registra o command_id no SessionManager para envio ao ERP
+        if (mSessionManager != null) mSessionManager.setCommandId(mActiveCommandId);
 
-        Log.i(TAG, "[QUEUE] Comando enfileirado — " + cmd);
+        Log.i(TAG, "[QUEUE] Comando enfileirado v2.3 — " + cmd
+                + " | session_id=" + mActiveSessionId);
         Log.i(TAG, "[QUEUE] Aguardando ML:ACK (10s) e DONE (60s)...");
         atualizarStatus("⏳ Aguardando abertura da válvula...");
     }
@@ -543,6 +575,29 @@ public class PagamentoConcluido extends AppCompatActivity {
         public void onServiceConnected(ComponentName name, IBinder service) {
             mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
             mIsServiceBound   = true;
+
+            // ── Inicializa SessionManager v2.3 ───────────────────────────────────────
+            if (mSessionManager == null) {
+                mSessionManager = new SessionManager(new SessionManager.Callback() {
+                    @Override
+                    public void onSessionStarted(String sessionId, String checkoutId) {
+                        Log.i(TAG, "[SESSION] Sessão iniciada | session_id=" + sessionId);
+                        mActiveSessionId = sessionId;
+                        // Enfileira o comando BLE com o session_id da sessão
+                        enfileirarComandoServe(qtd_ml);
+                    }
+                    @Override
+                    public void onSessionFinished(String sessionId, int mlReal) {
+                        Log.i(TAG, "[SESSION] Sessão finalizada | session_id=" + sessionId
+                                + " | ml_real=" + mlReal);
+                    }
+                    @Override
+                    public void onSessionFailed(String sessionId, String reason) {
+                        Log.e(TAG, "[SESSION] Sessão falhou | session_id=" + sessionId
+                                + " | motivo=" + reason);
+                    }
+                });
+            }
 
             android.bluetooth.BluetoothDevice devDebug = mBluetoothService.getBoundDevice();
             String bondDebug = (devDebug != null)

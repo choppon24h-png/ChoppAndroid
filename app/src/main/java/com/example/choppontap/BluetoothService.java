@@ -165,8 +165,10 @@ public class BluetoothService extends Service {
     private Runnable      mReconnectRunnable = null;
     private Runnable      mScanStopRunnable  = null;
 
-    // ── Fila de comandos BLE ──────────────────────────────────────────────────
+    // ── Fila de comandos BLE (legada) ──────────────────────────────────────────
     private CommandQueueManager mCommandQueue;
+    // ── BleManager v2.3 — orquestrador central (BleParser + ConnectionManager + CommandQueue) ──
+    private BleManager mBleManager;
 
     // ── Binder ────────────────────────────────────────────────────────────────
     private final IBinder mBinder = new LocalBinder();
@@ -210,7 +212,58 @@ public class BluetoothService extends Service {
             registerReceiver(mBondStateReceiver, bf);
         }
 
-        // Inicializa fila de comandos BLE com BleWriter e Callback
+        // ── Inicializa BleManager v2.3 ─────────────────────────────────────────
+        mBleManager = new BleManager(new BleManager.Callback() {
+            @Override
+            public void onStateChanged(ConnectionManager.State newState,
+                                       ConnectionManager.State oldState) {
+                Log.i(TAG, "[BLE_MGR] " + oldState.name() + " → " + newState.name());
+            }
+            @Override
+            public void onConnectRequested(String mac) {
+                Log.i(TAG, "[BLE_MGR] Reconexão solicitada pelo ConnectionManager → " + mac);
+                BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mac);
+                mMainHandler.post(() -> iniciarBondEConectar(device));
+            }
+            @Override
+            public void onCommandSent(BleCommand cmd) {
+                Log.i(TAG, "[BLE_MGR] SENT " + cmd.commandId);
+            }
+            @Override
+            public void onCommandAck(BleCommand cmd) {
+                Log.i(TAG, "[BLE_MGR] ACK " + cmd.commandId);
+                Intent ackIntent = new Intent(ACTION_DATA_AVAILABLE);
+                ackIntent.putExtra(EXTRA_DATA, "QUEUE:ACK:" + cmd.commandId);
+                LocalBroadcastManager.getInstance(BluetoothService.this).sendBroadcast(ackIntent);
+            }
+            @Override
+            public void onCommandDone(BleCommand cmd) {
+                Log.i(TAG, "[BLE_MGR] DONE " + cmd.commandId + " | ml_real=" + cmd.mlReal);
+                Intent doneIntent = new Intent(ACTION_DATA_AVAILABLE);
+                doneIntent.putExtra(EXTRA_DATA, "QUEUE:DONE:" + cmd.commandId + ":" + cmd.mlReal);
+                LocalBroadcastManager.getInstance(BluetoothService.this).sendBroadcast(doneIntent);
+            }
+            @Override
+            public void onCommandError(BleCommand cmd, String reason) {
+                Log.e(TAG, "[BLE_MGR] ERROR " + cmd.commandId + " | " + reason);
+                Intent errIntent = new Intent(ACTION_DATA_AVAILABLE);
+                errIntent.putExtra(EXTRA_DATA, "QUEUE:ERROR:" + cmd.commandId + ":" + reason);
+                LocalBroadcastManager.getInstance(BluetoothService.this).sendBroadcast(errIntent);
+            }
+            @Override
+            public void onHeartbeatFailed() {
+                Log.e(TAG, "[BLE_MGR] Heartbeat falhou — forçando reconexão GATT");
+                if (mBluetoothGatt != null) mMainHandler.post(() -> mBluetoothGatt.disconnect());
+            }
+        });
+        mBleManager.setWriter(data -> {
+            if (!isReady()) return false;
+            write(data);
+            return true;
+        });
+        if (mTargetMac != null) mBleManager.setTargetMac(mTargetMac);
+
+        // ── Inicializa fila de comandos BLE legada com BleWriter e Callback ─────────────
         mCommandQueue = new CommandQueueManager(
                 data -> {
                     // BleWriter: encaminha para write() do serviço
@@ -253,7 +306,7 @@ public class BluetoothService extends Service {
                 }
         );
 
-        Log.i(TAG, "[BLE] Serviço iniciado | MAC alvo: "
+        Log.i(TAG, "[BLE] Serviço iniciado v2.3 | MAC alvo: "
                 + (mTargetMac != null ? mTargetMac : "NÃO CONFIGURADO — aguardando scan"));
     }
 
@@ -267,7 +320,8 @@ public class BluetoothService extends Service {
         try { unregisterReceiver(mPairingReceiver); }   catch (Exception ignored) {}
         try { unregisterReceiver(mBondStateReceiver); } catch (Exception ignored) {}
         closeGatt();
-        Log.i(TAG, "[BLE] Serviço destruído");
+        if (mBleManager != null) mBleManager.destroy();
+        Log.i(TAG, "[BLE] Serviço destruído v2.3");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -605,6 +659,8 @@ public class BluetoothService extends Service {
                 mReconnectAttempts = 0;
                 transitionTo(BleState.CONNECTED);
                 broadcastConnectionStatus("connected");
+                // Notifica BleManager v2.3 da conexão
+                if (mBleManager != null) mBleManager.onGattConnected(device.getAddress());
 
                 // FIX STATUS=8 — CAMADA ANDROID:
                 // requestConnectionPriority(HIGH) reduz o connection interval para 7.5ms
@@ -629,8 +685,10 @@ public class BluetoothService extends Service {
                 }
 
                 // ── Estratégia de reconexão por tipo de status ──
-                // Notifica fila que BLE desconectou — pausa processamento
+                // Notifica fila legada e BleManager v2.3 da desconexão
                 if (mCommandQueue != null) mCommandQueue.onBleDisconnected();
+                boolean shouldClose = (status != GATT_CONN_TIMEOUT && status != 257 && status != GATT_CONN_FAIL_ESTABLISH);
+                if (mBleManager != null) mBleManager.onGattDisconnected(status, shouldClose);
 
                 if (status == GATT_CONN_TIMEOUT || status == 257 || status == GATT_CONN_FAIL_ESTABLISH) {
                     // Timeout ou falha de estabelecimento:
@@ -723,6 +781,9 @@ public class BluetoothService extends Service {
                 return;
             }
 
+            // ── BleManager v2.3: parse e roteamento centralizado ──────────────────
+            if (mBleManager != null) mBleManager.onBleDataReceived(data);
+
             if ("AUTH:OK".equalsIgnoreCase(data)) {
                 Log.i(TAG, "[GATT] *** AUTH:OK recebido *** — transitando para READY");
                 cancelarTimeout();
@@ -733,7 +794,7 @@ public class BluetoothService extends Service {
                     Log.w(TAG, "[DIAG] AUTH:OK recebido mas já estava em READY — re-emitindo ACTION_WRITE_READY");
                     broadcastWriteReady();
                 }
-                // Notifica fila que BLE está READY para processar comandos
+                // Notifica fila legada que BLE está READY
                 if (mCommandQueue != null) mCommandQueue.onBleReady();
 
             } else if ("AUTH:FAIL".equalsIgnoreCase(data)) {
@@ -1090,11 +1151,26 @@ public class BluetoothService extends Service {
     }
 
     /**
-     * Retorna o CommandQueueManager para uso pelas Activities.
+     * Retorna o CommandQueueManager legado para uso pelas Activities.
      * PagamentoConcluido usa este método para enfileirar comandos SERVE.
      */
     public CommandQueueManager getCommandQueue() {
         return mCommandQueue;
+    }
+
+    /** Retorna o BleManager v2.3 (orquestrador central). */
+    public BleManager getBleManager() {
+        return mBleManager;
+    }
+
+    /** Retorna o ConnectionManager v2.3 para monitoramento de estado. */
+    public ConnectionManager getConnectionManager() {
+        return mBleManager != null ? mBleManager.getConnectionManager() : null;
+    }
+
+    /** Retorna a CommandQueue v2.3 para enfileiramento de comandos SERVE. */
+    public CommandQueue getCommandQueueV2() {
+        return mBleManager != null ? mBleManager.getCommandQueue() : null;
     }
 
     public boolean connected() {
