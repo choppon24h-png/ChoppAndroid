@@ -220,10 +220,34 @@ public class BluetoothService extends Service {
                 Log.i(TAG, "[BLE_MGR] " + oldState.name() + " → " + newState.name());
             }
             @Override
-            public void onConnectRequested(String mac) {
-                Log.i(TAG, "[BLE_MGR] Reconexão solicitada pelo ConnectionManager → " + mac);
+            public void onConnectRequested(String mac, boolean autoConnect) {
+                Log.i(TAG, "[BLE_MGR] Conexão solicitada → " + mac
+                        + " (autoConnect=" + autoConnect + ")");
                 BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mac);
-                mMainHandler.post(() -> iniciarBondEConectar(device));
+                if (autoConnect) {
+                    // Reconexão automática: usa autoConnect=true (spec BLE Industrial v2.3)
+                    mMainHandler.post(() -> {
+                        if (mBluetoothGatt != null
+                                && mBluetoothGatt.getDevice().getAddress()
+                                        .equalsIgnoreCase(mac)) {
+                            Log.i(TAG, "[GATT] autoConnect=true → gatt.connect()");
+                            boolean ok = mBluetoothGatt.connect();
+                            if (!ok) {
+                                Log.w(TAG, "[GATT] gatt.connect() falhou — novo GATT autoConnect=true");
+                                closeGatt();
+                                mBluetoothGatt = device.connectGatt(
+                                        BluetoothService.this, true, mGattCallback);
+                            }
+                        } else {
+                            closeGatt();
+                            Log.i(TAG, "[GATT] connectGatt(autoConnect=true) → " + mac);
+                            mBluetoothGatt = device.connectGatt(
+                                    BluetoothService.this, true, mGattCallback);
+                        }
+                    });
+                } else {
+                    mMainHandler.post(() -> iniciarBondEConectar(device));
+                }
             }
             @Override
             public void onCommandSent(BleCommand cmd) {
@@ -499,6 +523,9 @@ public class BluetoothService extends Service {
                         // MAC válido — para scan, salva e conecta
                         Log.i(TAG, "[BLE] MAC válido encontrado: " + mac);
                         Log.i(TAG, "[BLE] Salvando MAC: " + mac);
+                        // Notifica BleManager v2.3 que dispositivo foi encontrado no scan
+                        // O ConnectionManager agenda conexão após delay de 800ms
+                        if (mBleManager != null) mBleManager.onDeviceFoundInScan(mac);
                         mMainHandler.post(() -> {
                             pararScan();
                             salvarMac(mac);
@@ -578,6 +605,8 @@ public class BluetoothService extends Service {
         Log.i(TAG, "[BLE] MAC não configurado — iniciando scan inteligente");
         broadcastConnectionStatus("scanning");
         mBleScanner.startScan(mScanCallback);
+        // Notifica BleManager v2.3 que scan foi iniciado (transiciona para SCANNING)
+        if (mBleManager != null) mBleManager.onScanStarted();
 
         // Para o scan após SCAN_TIMEOUT_MS e agenda nova tentativa se ainda sem MAC
         mScanStopRunnable = () -> {
