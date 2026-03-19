@@ -112,13 +112,13 @@ public class ServiceTools extends AppCompatActivity {
     private BroadcastReceiver mDownloadReceiver;
 
     // ── Bluetooth Service ─────────────────────────────────────────────────────
-    private BluetoothService mBluetoothService;
+    private BluetoothServiceIndustrial mBluetoothService;
     private boolean mIsServiceBound = false;
 
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
+            mBluetoothService = ((BluetoothServiceIndustrial.LocalBinder) service).getService();
             mIsServiceBound = true;
             Log.i(TAG, "BluetoothService vinculado ao ServiceTools");
             runOnUiThread(() -> {
@@ -189,7 +189,7 @@ public class ServiceTools extends AppCompatActivity {
         sincronizarEstadoTap();
 
         // ── Vincula o BluetoothService ────────────────────────────────────────
-        bindService(new Intent(this, BluetoothService.class), mServiceConnection, Context.BIND_AUTO_CREATE);
+        bindService(new Intent(this, BluetoothServiceIndustrial.class), mServiceConnection, Context.BIND_AUTO_CREATE);
 
         // ── Listeners ─────────────────────────────────────────────────────────
         btnCalibrarPulsos.setOnClickListener(v ->

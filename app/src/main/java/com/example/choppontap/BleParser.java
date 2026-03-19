@@ -3,11 +3,13 @@ package com.example.choppontap;
 import android.util.Log;
 
 /**
- * BleParser — Parser centralizado de respostas BLE do ESP32 v2.3.
+ * BleParser — Parser centralizado de respostas BLE do ESP32 v2.3 / v3.0-INDUSTRIAL.
  *
- * Protocolo ESP32 v2.3 suportado:
+ * Protocolo ESP32 v2.3 + v3.0-INDUSTRIAL suportado:
  *   AUTH:OK, AUTH:FAIL, ML:ACK, ACK|id, DONE, DONE|id|ml, DONE|id|ml|session,
- *   VP:ml, PONG, DUPLICATE, ML:DUPLICATE, ERROR:BUSY, ERROR:WATCHDOG, READY, BUSY
+ *   VP:ml, PONG, DUPLICATE, ML:DUPLICATE, ERROR:BUSY, ERROR:WATCHDOG, READY, BUSY,
+ *   VALVE:OPEN, VALVE:CLOSED, STATUS:IDLE, STATUS:RUNNING, STATUS:ERROR,
+ *   ERROR:NOT_AUTHENTICATED, ERROR:TIMEOUT, QUEUE:FULL
  *
  * Uso:
  *   BleParser.ParsedMessage msg = BleParser.parse(rawString);
@@ -27,8 +29,16 @@ public class BleParser {
         DUPLICATE,
         ERROR_BUSY,
         ERROR_WATCHDOG,
+        ERROR_NOT_AUTHENTICATED,  // ERROR:NOT_AUTHENTICATED — reenviar AUTH
+        ERROR_TIMEOUT,            // ERROR:TIMEOUT — timeout no ESP32
         STATUS_READY,
         STATUS_BUSY,
+        STATUS_IDLE,              // STATUS:IDLE — ESP32 ocioso
+        STATUS_RUNNING,           // STATUS:RUNNING — dispensação em andamento
+        STATUS_ERROR,             // STATUS:ERROR — erro no ESP32
+        VALVE_OPEN,               // VALVE:OPEN — válvula aberta
+        VALVE_CLOSED,             // VALVE:CLOSED — válvula fechada
+        QUEUE_FULL,               // QUEUE:FULL — fila do ESP32 cheia
         UNKNOWN
     }
 
@@ -120,6 +130,19 @@ public class BleParser {
             return new ParsedMessage(MessageType.DUPLICATE, s, null, null, 0);
         }
 
+        // ── ERROR:NOT_AUTHENTICATED — reenviar AUTH automaticamente ───────────
+        if ("ERROR:NOT_AUTHENTICATED".equalsIgnoreCase(s)
+                || "ERROR:NOTAUTH".equalsIgnoreCase(s)) {
+            Log.e(TAG, "[BLE] → ERROR_NOT_AUTHENTICATED");
+            return new ParsedMessage(MessageType.ERROR_NOT_AUTHENTICATED, s, null, null, 0);
+        }
+
+        // ── ERROR:TIMEOUT ─────────────────────────────────────────────────────
+        if ("ERROR:TIMEOUT".equalsIgnoreCase(s)) {
+            Log.e(TAG, "[BLE] → ERROR_TIMEOUT");
+            return new ParsedMessage(MessageType.ERROR_TIMEOUT, s, null, null, 0);
+        }
+
         // ── ERROR:BUSY ────────────────────────────────────────────────────────
         if ("ERROR:BUSY".equalsIgnoreCase(s)) {
             Log.w(TAG, "[BLE] → ERROR_BUSY");
@@ -130,6 +153,36 @@ public class BleParser {
         if (s.startsWith("ERROR:WATCHDOG") || s.startsWith("ERROR:WDG")) {
             Log.e(TAG, "[BLE] → ERROR_WATCHDOG");
             return new ParsedMessage(MessageType.ERROR_WATCHDOG, s, null, null, 0);
+        }
+
+        // ── VALVE:OPEN / VALVE:CLOSED ─────────────────────────────────────────
+        if ("VALVE:OPEN".equalsIgnoreCase(s)) {
+            Log.i(TAG, "[BLE] → VALVE_OPEN");
+            return new ParsedMessage(MessageType.VALVE_OPEN, s, null, null, 0);
+        }
+        if ("VALVE:CLOSED".equalsIgnoreCase(s)) {
+            Log.i(TAG, "[BLE] → VALVE_CLOSED");
+            return new ParsedMessage(MessageType.VALVE_CLOSED, s, null, null, 0);
+        }
+
+        // ── STATUS:IDLE / STATUS:RUNNING / STATUS:ERROR ───────────────────────
+        if ("STATUS:IDLE".equalsIgnoreCase(s)) {
+            Log.i(TAG, "[BLE] → STATUS_IDLE");
+            return new ParsedMessage(MessageType.STATUS_IDLE, s, null, null, 0);
+        }
+        if ("STATUS:RUNNING".equalsIgnoreCase(s)) {
+            Log.i(TAG, "[BLE] → STATUS_RUNNING");
+            return new ParsedMessage(MessageType.STATUS_RUNNING, s, null, null, 0);
+        }
+        if ("STATUS:ERROR".equalsIgnoreCase(s)) {
+            Log.e(TAG, "[BLE] → STATUS_ERROR");
+            return new ParsedMessage(MessageType.STATUS_ERROR, s, null, null, 0);
+        }
+
+        // ── QUEUE:FULL ────────────────────────────────────────────────────────
+        if ("QUEUE:FULL".equalsIgnoreCase(s)) {
+            Log.e(TAG, "[BLE] → QUEUE_FULL");
+            return new ParsedMessage(MessageType.QUEUE_FULL, s, null, null, 0);
         }
 
         // ── READY (resposta a STATUS) ─────────────────────────────────────────

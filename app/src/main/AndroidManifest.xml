@@ -113,6 +113,15 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!-- MUDANÇA 1: BluetoothServiceIndustrial — implementação industrial para ESP32 BLE.
+             Substitui BluetoothService em todas as Activities como drop-in replacement.
+             BluetoothService permanece declarado para compatibilidade com ConnectedThread. -->
+        <service
+            android:name=".BluetoothServiceIndustrial"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
         <!-- FileProvider para instalação de APK via sistema de atualização (v3.2.0) -->
         <provider
             android:name="androidx.core.content.FileProvider"

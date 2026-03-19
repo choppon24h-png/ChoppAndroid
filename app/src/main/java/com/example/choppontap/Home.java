@@ -2,6 +2,8 @@ package com.example.choppontap;
 
 import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 import android.content.ComponentName;
@@ -89,7 +91,7 @@ public class Home extends AppCompatActivity {
     private Future<?> currentImageTask = null;
 
     // ── Bluetooth ─────────────────────────────────────────────────────────────
-    private BluetoothService mBluetoothService;
+    private BluetoothServiceIndustrial mBluetoothService;
     private boolean mIsServiceBound = false;
 
     /**
@@ -99,8 +101,8 @@ public class Home extends AppCompatActivity {
     private final BroadcastReceiver mServiceUpdateReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (BluetoothService.ACTION_CONNECTION_STATUS.equals(intent.getAction())) {
-                String status = intent.getStringExtra(BluetoothService.EXTRA_STATUS);
+            if (BluetoothServiceIndustrial.ACTION_CONNECTION_STATUS.equals(intent.getAction())) {
+                String status = intent.getStringExtra(BluetoothServiceIndustrial.EXTRA_STATUS);
                 if (status != null) {
                     Log.d(TAG, "BLE status recebido via broadcast: " + status);
                     updateBluetoothStatus(status);
@@ -130,7 +132,7 @@ public class Home extends AppCompatActivity {
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
+            mBluetoothService = ((BluetoothServiceIndustrial.LocalBinder) service).getService();
             mIsServiceBound = true;
             Log.i(TAG, "BluetoothService vinculado. Estado atual: "
                     + (mBluetoothService.connected() ? "CONECTADO" : "DESCONECTADO"));
@@ -203,7 +205,7 @@ public class Home extends AppCompatActivity {
         secretClickCount = 0;
 
         // Registra o receiver para receber broadcasts de status BLE
-        IntentFilter filter = new IntentFilter(BluetoothService.ACTION_CONNECTION_STATUS);
+        IntentFilter filter = new IntentFilter(BluetoothServiceIndustrial.ACTION_CONNECTION_STATUS);
         LocalBroadcastManager.getInstance(this).registerReceiver(mServiceUpdateReceiver, filter);
 
         // Se já vinculado mas desconectado, reinicia o scan
@@ -651,7 +653,7 @@ public class Home extends AppCompatActivity {
     // ─────────────────────────────────────────────────────────────────────────
 
     private void bindBluetoothService() {
-        Intent serviceIntent = new Intent(this, BluetoothService.class);
+        Intent serviceIntent = new Intent(this, BluetoothServiceIndustrial.class);
         // FIX: BackgroundServiceStartNotAllowedException (Android 12+)
         // O sistema Android 12+ não permite startService() quando o app está em background.
         // Usar startForegroundService() garante que o serviço BLE inicie mesmo nessa situação.
@@ -690,6 +692,12 @@ public class Home extends AppCompatActivity {
      * @param multiplicador fator de volume: 3=300ml, 5=500ml, 7=700ml, 10=1000ml
      */
     protected void openIntent(Integer multiplicador) {
+        // MUDANÇA 4: bloquear venda sem internet
+        if (!isInternetAvailable()) {
+            Log.e(TAG, "[NET] Sem internet — venda bloqueada");
+            Toast.makeText(this, "Sem conexão com a internet. Verifique sua rede.", Toast.LENGTH_LONG).show();
+            return;
+        }
         if (mBluetoothService != null && mBluetoothService.connected()) {
             int volumeMl = multiplicador * 100;
             float valor  = valorBase != null ? valorBase * multiplicador : 0f;
@@ -705,6 +713,23 @@ public class Home extends AppCompatActivity {
             startActivity(it);
         } else {
             Toast.makeText(this, "Aguardando conexão Bluetooth...", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * Verifica se há conexão com a internet disponível.
+     * MUDANÇA 4: bloqueia início de venda sem rede.
+     */
+    private boolean isInternetAvailable() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            NetworkInfo ni = cm.getActiveNetworkInfo();
+            return ni != null && ni.isConnected();
+        } catch (Exception e) {
+            Log.e(TAG, "[NET] isInternetAvailable() erro: " + e.getMessage());
+            return false;
         }
     }
 

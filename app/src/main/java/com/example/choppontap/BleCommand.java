@@ -3,20 +3,27 @@ package com.example.choppontap;
 /**
  * BleCommand — Modelo de um comando BLE Industrial v2.3.
  *
- * Representa um comando na fila do CommandQueueManager com ciclo de vida:
+ * Representa um comando na fila do CommandQueue/CommandQueueManager com ciclo de vida:
  *   QUEUED → SENT → ACKED → DONE (ou ERROR)
  *
- * Formatos suportados:
- *   Formato A (legado):   $ML:300:CMD_A1B2
- *   Formato B (v2.3):     SERVE|300|ID=A1B2|SESSION=SES_ABC
+ * Formato de envio ao ESP32 Industrial:
+ *   SERVE:  SERVE|<ml>|ID=<cmdId>|SESSION=<sessionId>
+ *   AUTH:   $AUTH:<pin>:<cmdId>
+ *   STOP:   $STOP:<cmdId>
+ *   STATUS: $STATUS:<cmdId>
+ *   PING:   $PING:<cmdId>
  *
- * O firmware ESP32 aceita ambos os formatos e normaliza SERVE → ML internamente.
+ * O firmware ESP32 normaliza SERVE → ML internamente.
+ *
+ * MUDANÇA v3.0-INDUSTRIAL:
+ *   - toBleString() SERVE agora usa formato SERVE|<ml>|ID=<id>|SESSION=<session>
+ *   - AUTH usa BluetoothServiceIndustrial.ESP32_PIN (fonte única de verdade)
  */
 public class BleCommand {
 
     // ── Tipos de comando ──────────────────────────────────────────────────────
     public enum Type {
-        AUTH,    // $AUTH:259087 — autenticação por PIN
+        AUTH,    // $AUTH:259087:<id> — autenticação por PIN
         SERVE,   // SERVE|<ml>|ID=<id>|SESSION=<session> — liberação de chopp
         STOP,    // $STOP:<id> — parar dispensação
         STATUS,  // $STATUS:<id> — consultar estado do ESP32
@@ -57,19 +64,23 @@ public class BleCommand {
     }
 
     /**
-     * Gera a string de comando BLE no Formato B (v2.3) para SERVE.
-     * Formato: SERVE|<ml>|ID=<id>|SESSION=<session>
+     * Gera a string de comando BLE para envio ao ESP32 Industrial.
      *
-     * Para outros tipos, usa o Formato A com prefixo $.
+     * Formato SERVE (v3.0-INDUSTRIAL):
+     *   SERVE|<ml>|ID=<cmdId>|SESSION=<sessionId>
+     *   Exemplo: SERVE|300|ID=A1B2C3D4|SESSION=SES_8472ABCD
+     *
+     * Para outros tipos, usa o formato legado com prefixo $.
      */
     public String toBleString() {
         switch (type) {
             case SERVE:
-                // Protocolo real ESP32 v2.3: $ML:<ml>:<CMD_ID>
-                // Compatível com $ML:300:CMD_A1B2 (item 13 do documento)
-                return "$ML:" + volumeMl + ":" + commandId;
+                // Protocolo Industrial ESP32 v3.0: SERVE|<ml>|ID=<id>|SESSION=<session>
+                // O firmware CHOPP_* normaliza SERVE → ML internamente
+                return "SERVE|" + volumeMl + "|ID=" + commandId + "|SESSION=" + sessionId;
             case AUTH:
-                return "$AUTH:" + BluetoothService.ESP32_PIN + ":" + commandId;
+                // Usa BluetoothServiceIndustrial como fonte única do PIN
+                return "$AUTH:" + BluetoothServiceIndustrial.ESP32_PIN + ":" + commandId;
             case STOP:
                 return "$STOP:" + commandId;
             case STATUS:

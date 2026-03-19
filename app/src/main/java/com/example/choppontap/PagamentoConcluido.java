@@ -1,6 +1,8 @@
 package com.example.choppontap;
 
 import android.content.BroadcastReceiver;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -130,7 +132,7 @@ public class PagamentoConcluido extends AppCompatActivity {
     private Future<?> currentImageTask = null;
 
     // ── Bluetooth ────────────────────────────────────────────────────────────────────────────────
-    private BluetoothService mBluetoothService;
+    private BluetoothServiceIndustrial mBluetoothService;
     private boolean          mIsServiceBound = false;
     // ── SessionManager v2.3 — anti-fraude com start_session/finish_session ─────────────────
     private SessionManager   mSessionManager;
@@ -175,7 +177,7 @@ public class PagamentoConcluido extends AppCompatActivity {
                 // ─────────────────────────────────────────────────────────────
                 // BLE READY: canal autenticado — enfileirar comando
                 // ─────────────────────────────────────────────────────────────
-                case BluetoothService.ACTION_WRITE_READY:
+                case BluetoothServiceIndustrial.ACTION_WRITE_READY:
                     Log.i(TAG, "[BLE] ACTION_WRITE_READY — canal autenticado (READY). "
                             + "Aguardando " + ML_SEND_DELAY_MS + "ms antes de enfileirar $ML.");
                     atualizarStatus("✓ Dispositivo autenticado. Liberando...");
@@ -195,8 +197,8 @@ public class PagamentoConcluido extends AppCompatActivity {
                 // ─────────────────────────────────────────────────────────────
                 // STATUS DE CONEXÃO
                 // ─────────────────────────────────────────────────────────────
-                case BluetoothService.ACTION_CONNECTION_STATUS:
-                    String status = intent.getStringExtra(BluetoothService.EXTRA_STATUS);
+                case BluetoothServiceIndustrial.ACTION_CONNECTION_STATUS:
+                    String status = intent.getStringExtra(BluetoothServiceIndustrial.EXTRA_STATUS);
                     if ("disconnected".equals(status)) {
                         Log.w(TAG, "[BLE] Dispositivo DESCONECTADO durante liberação");
                         atualizarStatus("🔄 Reconectando ao dispositivo...");
@@ -220,16 +222,16 @@ public class PagamentoConcluido extends AppCompatActivity {
                 // ─────────────────────────────────────────────────────────────
                 // ESTADO BLE MUDOU
                 // ─────────────────────────────────────────────────────────────
-                case BluetoothService.ACTION_BLE_STATE_CHANGED:
-                    String stateName = intent.getStringExtra(BluetoothService.EXTRA_BLE_STATE);
+                case BluetoothServiceIndustrial.ACTION_BLE_STATE_CHANGED:
+                    String stateName = intent.getStringExtra(BluetoothServiceIndustrial.EXTRA_BLE_STATE);
                     Log.d(TAG, "[BLE] Estado BLE: " + stateName);
                     break;
 
                 // ─────────────────────────────────────────────────────────────
                 // DADOS DO ESP32 / FILA
                 // ─────────────────────────────────────────────────────────────
-                case BluetoothService.ACTION_DATA_AVAILABLE:
-                    String data = intent.getStringExtra(BluetoothService.EXTRA_DATA);
+                case BluetoothServiceIndustrial.ACTION_DATA_AVAILABLE:
+                    String data = intent.getStringExtra(BluetoothServiceIndustrial.EXTRA_DATA);
                     if (data != null) processarMensagem(data.trim());
                     break;
             }
@@ -348,7 +350,7 @@ public class PagamentoConcluido extends AppCompatActivity {
 
             if (mBluetoothService != null) {
                 android.bluetooth.BluetoothDevice dev = mBluetoothService.getBoundDevice();
-                if (dev != null) BluetoothService.removeBond(dev);
+                if (dev != null) BluetoothServiceIndustrial.removeBond(dev);
                 mBluetoothService.disconnect();
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     if (mBluetoothService != null) {
@@ -510,6 +512,17 @@ public class PagamentoConcluido extends AppCompatActivity {
      *   2. enfileirarComandoServe()
      */
     private void iniciarVendaEEnfileirar() {
+        // MUDANÇA 4: bloquear venda sem internet — NÃO enviar comando BLE
+        if (!isInternetAvailable()) {
+            Log.e(TAG, "[NET] Sem internet — venda bloqueada, comando BLE NÃO enviado");
+            atualizarStatus("❌ Sem internet. Verifique sua rede.");
+            runOnUiThread(() ->
+                Toast.makeText(PagamentoConcluido.this,
+                        "Sem conexão com a internet. Verifique sua rede.",
+                        Toast.LENGTH_LONG).show()
+            );
+            return;
+        }
         if (mComandoEnviado) {
             Log.w(TAG, "[PAYMENT] iniciarVendaEEnfileirar() BLOQUEADO — mComandoEnviado=true");
             return;
@@ -535,7 +548,24 @@ public class PagamentoConcluido extends AppCompatActivity {
     }
 
     /**
-     * Enfileira um BleCommand SERVE via CommandQueueManager.
+     * Verifica se há conexão com a internet disponível.
+     * MUDANÇA 4: bloqueia início de venda sem rede.
+     */
+    private boolean isInternetAvailable() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            NetworkInfo ni = cm.getActiveNetworkInfo();
+            return ni != null && ni.isConnected();
+        } catch (Exception e) {
+            Log.e(TAG, "[NET] isInternetAvailable() erro: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Enfileira um BleCommand SERVE via CommandQueue v2.3 (getCommandQueueV2).
      * Deve ser chamado APÓS start_session/start_sale retornar sucesso.
      */
     private void enfileirarComandoServe(int volumeMl) {
@@ -544,16 +574,24 @@ public class PagamentoConcluido extends AppCompatActivity {
             return;
         }
 
-        CommandQueueManager queue = mBluetoothService.getCommandQueue();
+        // MUDANÇA 3: usar CommandQueue v2.3 (getCommandQueueV2) — sem CommandQueueManager legado
+        CommandQueue queue = mBluetoothService.getCommandQueueV2();
         if (queue == null) {
-            Log.e(TAG, "[QUEUE] CommandQueueManager nulo — usando envio direto como fallback");
+            Log.e(TAG, "[QUEUE] CommandQueue v2.3 nula — usando envio direto como fallback");
             mComandoEnviado = true;
             mBluetoothService.write("$ML:" + volumeMl);
             return;
         }
 
         mComandoEnviado = true;
-        BleCommand cmd = queue.enqueueServe(volumeMl);
+        // CommandQueue v2.3: enqueueServe(volumeMl, sessionId)
+        String sessionId = mActiveSessionId != null ? mActiveSessionId : "";
+        BleCommand cmd = queue.enqueueServe(volumeMl, sessionId);
+        if (cmd == null) {
+            Log.e(TAG, "[QUEUE] Fila cheia (QUEUE:FULL) — comando SERVE rejeitado");
+            atualizarStatus("⚠️ Fila cheia. Tente novamente.");
+            return;
+        }
         mActiveCommandId = cmd.commandId;
         // Usa session_id do SessionManager v2.3 se disponível, senão usa o do BleCommand
         if (mActiveSessionId == null) mActiveSessionId = cmd.sessionId;
@@ -562,7 +600,7 @@ public class PagamentoConcluido extends AppCompatActivity {
 
         Log.i(TAG, "[QUEUE] Comando enfileirado v2.3 — " + cmd
                 + " | session_id=" + mActiveSessionId);
-        Log.i(TAG, "[QUEUE] Aguardando ML:ACK (10s) e DONE (60s)...");
+        Log.i(TAG, "[QUEUE] Aguardando ACK (2s) e DONE (15s)...");
         atualizarStatus("⏳ Aguardando abertura da válvula...");
     }
 
@@ -573,7 +611,7 @@ public class PagamentoConcluido extends AppCompatActivity {
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            mBluetoothService = ((BluetoothService.LocalBinder) service).getService();
+            mBluetoothService = ((BluetoothServiceIndustrial.LocalBinder) service).getService();
             mIsServiceBound   = true;
 
             // ── Inicializa SessionManager v2.3 ───────────────────────────────────────
@@ -704,7 +742,7 @@ public class PagamentoConcluido extends AppCompatActivity {
 
         // Inicia e vincula o BluetoothService
         Log.i(TAG, "[BLE] Iniciando BluetoothService...");
-        Intent serviceIntent = new Intent(this, BluetoothService.class);
+        Intent serviceIntent = new Intent(this, BluetoothServiceIndustrial.class);
         startService(serviceIntent);
         bindService(serviceIntent, mServiceConnection, Context.BIND_AUTO_CREATE);
 
@@ -739,10 +777,10 @@ public class PagamentoConcluido extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         IntentFilter filter = new IntentFilter();
-        filter.addAction(BluetoothService.ACTION_CONNECTION_STATUS);
-        filter.addAction(BluetoothService.ACTION_DATA_AVAILABLE);
-        filter.addAction(BluetoothService.ACTION_WRITE_READY);
-        filter.addAction(BluetoothService.ACTION_BLE_STATE_CHANGED);
+        filter.addAction(BluetoothServiceIndustrial.ACTION_CONNECTION_STATUS);
+        filter.addAction(BluetoothServiceIndustrial.ACTION_DATA_AVAILABLE);
+        filter.addAction(BluetoothServiceIndustrial.ACTION_WRITE_READY);
+        filter.addAction(BluetoothServiceIndustrial.ACTION_BLE_STATE_CHANGED);
         LocalBroadcastManager.getInstance(this).registerReceiver(mServiceUpdateReceiver, filter);
     }
 

@@ -106,6 +106,8 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 import java.util.concurrent.TimeUnit;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 
 public class BluetoothServiceIndustrial extends Service {
 
@@ -161,6 +163,7 @@ public class BluetoothServiceIndustrial extends Service {
                 pararHeartbeat();
                 mWriteCharacteristic = null;
                 mWriteBusy.set(false);
+                if (mCommandQueueV2 != null) mCommandQueueV2.onBleDisconnected();
                 break;
             case SCANNING:
                 pararHeartbeat();
@@ -174,10 +177,13 @@ public class BluetoothServiceIndustrial extends Service {
             case READY:
                 mReconnectAttempts = 0;
                 mReconnectDelay    = BACKOFF_DELAYS[0];
+                mAuthRetryCount    = 0;
                 iniciarHeartbeat();
                 broadcastWriteReady();
-                // Drena fila de comandos pendentes
+                // Drena fila de comandos pendentes (fila string interna)
                 mMainHandler.post(this::drainCommandQueue);
+                // Notifica CommandQueue v2.3 que BLE está pronto
+                if (mCommandQueueV2 != null) mCommandQueueV2.onBleReady();
                 break;
             case ERROR:
                 pararHeartbeat();
@@ -326,6 +332,19 @@ public class BluetoothServiceIndustrial extends Service {
     private final AtomicBoolean mWriteBusy = new AtomicBoolean(false);
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // CommandQueue v2.3 — fila tipada de BleCommand (SERVE/AUTH/etc.)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** CommandQueue v2.3 — fila tipada para rastreamento completo de comandos SERVE. */
+    private CommandQueue mCommandQueueV2 = null;
+
+    /** Número máximo de tentativas de reenvio de AUTH após ERROR:NOT_AUTHENTICATED. */
+    private static final int MAX_AUTH_RETRY = 3;
+
+    /** Contador de tentativas de reenvio de AUTH. */
+    private int mAuthRetryCount = 0;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Handlers e Runnables
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -395,6 +414,32 @@ public class BluetoothServiceIndustrial extends Service {
             registerReceiver(mPairingReceiver,   pf);
             registerReceiver(mBondStateReceiver, bf);
         }
+
+        // Inicializa CommandQueue v2.3 com callbacks de broadcast
+        mCommandQueueV2 = new CommandQueue(
+            data -> write(data),
+            new CommandQueue.Callback() {
+                @Override public void onSend(BleCommand cmd) {
+                    Log.i(TAG, "[QUEUE_V2] SEND " + cmd);
+                }
+                @Override public void onAck(BleCommand cmd) {
+                    Log.i(TAG, "[QUEUE_V2] ACK " + cmd);
+                    broadcastData("QUEUE:ACK:" + cmd.commandId);
+                }
+                @Override public void onDone(BleCommand cmd) {
+                    Log.i(TAG, "[QUEUE_V2] DONE " + cmd + " | ml_real=" + cmd.mlReal);
+                    broadcastData("QUEUE:DONE:" + cmd.commandId + ":" + cmd.mlReal);
+                }
+                @Override public void onError(BleCommand cmd, String reason) {
+                    Log.e(TAG, "[QUEUE_V2] ERROR " + cmd + " | reason=" + reason);
+                    broadcastData("QUEUE:ERROR:" + cmd.commandId + ":" + reason);
+                }
+                @Override public void onQueueFull() {
+                    Log.e(TAG, "[QUEUE_V2] QUEUE:FULL");
+                    broadcastData("QUEUE:FULL");
+                }
+            }
+        );
 
         Log.i(TAG, "[INDUSTRIAL] Service iniciado. Iniciando conexão BLE...");
         iniciarConexao();
@@ -1180,6 +1225,73 @@ public class BluetoothServiceIndustrial extends Service {
         }
 
         // ── Demais dados (ML:ACK, DONE, VP:, QP:, ERROR:, etc.) ─────────────
+        // ── ERROR:NOT_AUTHENTICATED — reenviar AUTH automaticamente ─────────
+        if ("ERROR:NOT_AUTHENTICATED".equalsIgnoreCase(data)
+                || "ERROR:NOTAUTH".equalsIgnoreCase(data)) {
+            Log.e(TAG, "[AUTH] ERROR:NOT_AUTHENTICATED | retry=" + mAuthRetryCount + "/" + MAX_AUTH_RETRY);
+            broadcastData(data);
+            if (mAuthRetryCount < MAX_AUTH_RETRY) {
+                mAuthRetryCount++;
+                Log.i(TAG, "[AUTH] Reenviando AUTH automaticamente (tentativa " + mAuthRetryCount + ")");
+                mMainHandler.postDelayed(() -> writeImediato(AUTH_COMMAND), 500L);
+            } else {
+                Log.e(TAG, "[AUTH] Máximo de retries AUTH atingido ("
+                        + MAX_AUTH_RETRY + ") — reconectando");
+                mAuthRetryCount = 0;
+                if (mBluetoothGatt != null) mBluetoothGatt.disconnect();
+            }
+            return;
+        }
+
+        // ── VALVE:OPEN / VALVE:CLOSED ─────────────────────────────────────────
+        if ("VALVE:OPEN".equalsIgnoreCase(data)) {
+            Log.i(TAG, "[BLE] Válvula ABERTA");
+            broadcastData(data);
+            return;
+        }
+        if ("VALVE:CLOSED".equalsIgnoreCase(data)) {
+            Log.i(TAG, "[BLE] Válvula FECHADA");
+            broadcastData(data);
+            return;
+        }
+
+        // ── STATUS:IDLE / STATUS:RUNNING / STATUS:ERROR ───────────────────────
+        if ("STATUS:IDLE".equalsIgnoreCase(data)) {
+            Log.i(TAG, "[BLE] ESP32 STATUS:IDLE");
+            broadcastData(data);
+            return;
+        }
+        if ("STATUS:RUNNING".equalsIgnoreCase(data)) {
+            Log.i(TAG, "[BLE] ESP32 STATUS:RUNNING");
+            broadcastData(data);
+            return;
+        }
+        if ("STATUS:ERROR".equalsIgnoreCase(data)) {
+            Log.e(TAG, "[BLE] ESP32 STATUS:ERROR");
+            broadcastData(data);
+            return;
+        }
+
+        // ── QUEUE:FULL ────────────────────────────────────────────────────────
+        if ("QUEUE:FULL".equalsIgnoreCase(data)) {
+            Log.e(TAG, "[BLE] QUEUE:FULL — fila do ESP32 cheia");
+            broadcastData(data);
+            return;
+        }
+
+        // ── ERROR:TIMEOUT ─────────────────────────────────────────────────────
+        if ("ERROR:TIMEOUT".equalsIgnoreCase(data)) {
+            Log.e(TAG, "[BLE] ERROR:TIMEOUT recebido do ESP32");
+            broadcastData(data);
+            return;
+        }
+
+        // ── Demais dados (ACK, DONE, VP:, QP:, ERROR:BUSY, etc.) ─────────────
+        // Roteia para CommandQueue v2.3 se houver comando ativo
+        if (mCommandQueueV2 != null) {
+            BleParser.ParsedMessage msg = BleParser.parse(data);
+            mCommandQueueV2.onBleResponse(msg);
+        }
         Log.i(TAG, "[BLE] Dado recebido: \"" + data + "\"");
         broadcastData(data);
     }
@@ -1563,5 +1675,125 @@ public class BluetoothServiceIndustrial extends Service {
         mCommandQueue.clear();
         mWriteBusy.set(false);
         Log.i(TAG, "[API] clearQueue() — " + size + " comandos descartados");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // API de compatibilidade com BluetoothService (drop-in replacement)
+    // Permite que Home, PagamentoConcluido, ServiceTools, ModificarTimeout e
+    // CalibrarPulsos usem BluetoothServiceIndustrial sem alterar suas chamadas.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Enum de compatibilidade com BluetoothService.BleState.
+     * Mapeia os estados internos de BluetoothServiceIndustrial.
+     */
+    public enum BleState { DISCONNECTED, CONNECTED, READY }
+
+    /**
+     * Retorna o estado BLE no formato compatível com BluetoothService.BleState.
+     * Usado por PagamentoConcluido.getBleState().
+     */
+    public BleState getBleState() {
+        switch (mState) {
+            case READY:        return BleState.READY;
+            case CONNECTED:    return BleState.CONNECTED;
+            case AUTHENTICATING:
+            case BONDING:      return BleState.CONNECTED;
+            default:           return BleState.DISCONNECTED;
+        }
+    }
+
+    /**
+     * Retorna true se o BLE está conectado (não desconectado).
+     * Compatível com BluetoothService.connected().
+     */
+    public boolean connected() {
+        return mBluetoothGatt != null && mState != State.DISCONNECTED;
+    }
+
+    /**
+     * Força o estado para READY — usado por PagamentoConcluido após auth manual.
+     * Compatível com BluetoothService.forceReady().
+     */
+    public void forceReady() {
+        Log.i(TAG, "[COMPAT] forceReady() chamado — estado=" + mState.name());
+        if (mState != State.READY) {
+            transitionTo(State.READY);
+        }
+    }
+
+    /**
+     * Inicia ou para o scan BLE por dispositivos CHOPP_.
+     * Compatível com BluetoothService.scanLeDevice(boolean).
+     */
+    public void scanLeDevice(boolean enable) {
+        mAutoReconnect = true;
+        if (!enable) {
+            pararScan();
+            return;
+        }
+        if (mTargetMac != null) {
+            Log.i(TAG, "[COMPAT] scanLeDevice() — MAC salvo: " + mTargetMac + " → conectando");
+            BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mTargetMac);
+            iniciarBondEConectar(device);
+        } else {
+            Log.i(TAG, "[COMPAT] scanLeDevice() — sem MAC → scan por CHOPP_");
+            iniciarScanComRetry();
+        }
+    }
+
+    /**
+     * Habilita reconexão automática.
+     * Compatível com BluetoothService.enableAutoReconnect().
+     */
+    public void enableAutoReconnect() {
+        mAutoReconnect = true;
+        mReconnectAttempts = 0;
+        Log.i(TAG, "[COMPAT] enableAutoReconnect()");
+    }
+
+    /**
+     * Retorna o dispositivo BLE atualmente conectado.
+     * Compatível com BluetoothService.getBoundDevice().
+     */
+    public BluetoothDevice getBoundDevice() {
+        return mBluetoothGatt != null ? mBluetoothGatt.getDevice() : null;
+    }
+
+    /**
+     * Retorna CommandQueueManager (legado) — null nesta implementação.
+     * Use getCommandQueueV2() para a fila tipada v2.3.
+     * Compatível com BluetoothService.getCommandQueue().
+     */
+    public CommandQueueManager getCommandQueue() {
+        // BluetoothServiceIndustrial não usa CommandQueueManager legado.
+        // Retorna null para forçar uso de getCommandQueueV2().
+        Log.w(TAG, "[COMPAT] getCommandQueue() chamado — use getCommandQueueV2()");
+        return null;
+    }
+
+    /**
+     * Retorna a CommandQueue v2.3 para enfileiramento de comandos SERVE.
+     * Compatível com BluetoothService.getCommandQueueV2().
+     */
+    public CommandQueue getCommandQueueV2() {
+        return mCommandQueueV2;
+    }
+
+    /**
+     * Verifica se há conexão com a internet disponível.
+     * Usado por Home e PagamentoConcluido para bloquear venda sem rede.
+     */
+    public boolean isInternetAvailable() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            NetworkInfo ni = cm.getActiveNetworkInfo();
+            return ni != null && ni.isConnected();
+        } catch (Exception e) {
+            Log.e(TAG, "[NET] isInternetAvailable() erro: " + e.getMessage());
+            return false;
+        }
     }
 }

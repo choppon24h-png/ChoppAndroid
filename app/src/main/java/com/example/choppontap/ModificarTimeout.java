@@ -34,7 +34,7 @@ public class ModificarTimeout extends AppCompatActivity {
     private final OkHttpClient client = new OkHttpClient();
     String android_id;
     private Handler handler = new Handler();
-    private BluetoothService mBluetoothService;
+    private BluetoothServiceIndustrial mBluetoothService;
     private boolean mIsServiceBound = false;
     TextView txtTimeoutAtual;
     Button btnSalvarTimeout;
@@ -42,8 +42,8 @@ public class ModificarTimeout extends AppCompatActivity {
         @Override
         public void onReceive(Context context, Intent intent) {
             final String action = intent.getAction();
-            if (BluetoothService.ACTION_CONNECTION_STATUS.equals(action)) {
-                String status = intent.getStringExtra(BluetoothService.EXTRA_STATUS);
+            if (BluetoothServiceIndustrial.ACTION_CONNECTION_STATUS.equals(action)) {
+                String status = intent.getStringExtra(BluetoothServiceIndustrial.EXTRA_STATUS);
                 if(status.equals("Not found")  || status.equals("disconnected")){
                     btnSalvarTimeout.setEnabled(false);
                     btnSalvarTimeout.setTextColor(Color.GRAY);
@@ -68,12 +68,12 @@ public class ModificarTimeout extends AppCompatActivity {
                 }
 
                 // mStatusTextView.setText(status); // Ex: "Conectado"
-            } else if (BluetoothService.ACTION_DATA_AVAILABLE.equals(action)) {
-                String receivedData = intent.getStringExtra(BluetoothService.EXTRA_DATA);
+            } else if (BluetoothServiceIndustrial.ACTION_DATA_AVAILABLE.equals(action)) {
+                String receivedData = intent.getStringExtra(BluetoothServiceIndustrial.EXTRA_DATA);
                 txtTimeoutAtual.setText(receivedData);
             }
-            else if (BluetoothService.ACTION_DEVICE_FOUND.equals(action)) {
-                BluetoothDevice device = intent.getParcelableExtra(BluetoothService.EXTRA_DEVICE);
+            else if (BluetoothServiceIndustrial.ACTION_DEVICE_FOUND.equals(action)) {
+                BluetoothDevice device = intent.getParcelableExtra(BluetoothServiceIndustrial.EXTRA_DEVICE);
 
 
             }
@@ -85,7 +85,7 @@ public class ModificarTimeout extends AppCompatActivity {
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            BluetoothService.LocalBinder binder = (BluetoothService.LocalBinder) service;
+            BluetoothServiceIndustrial.LocalBinder binder = (BluetoothServiceIndustrial.LocalBinder) service;
             mBluetoothService = binder.getService();
             mIsServiceBound = true;
             if(mBluetoothService.connected()){
@@ -117,9 +117,9 @@ public class ModificarTimeout extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         IntentFilter filter = new IntentFilter();
-        filter.addAction(BluetoothService.ACTION_CONNECTION_STATUS);
-        filter.addAction(BluetoothService.ACTION_DEVICE_FOUND);
-        filter.addAction(BluetoothService.ACTION_DATA_AVAILABLE);
+        filter.addAction(BluetoothServiceIndustrial.ACTION_CONNECTION_STATUS);
+        filter.addAction(BluetoothServiceIndustrial.ACTION_DEVICE_FOUND);
+        filter.addAction(BluetoothServiceIndustrial.ACTION_DATA_AVAILABLE);
         LocalBroadcastManager.getInstance(this).registerReceiver(mServiceUpdateReceiver, filter);
     }
 
@@ -146,7 +146,7 @@ public class ModificarTimeout extends AppCompatActivity {
 
         btnSalvarTimeout = findViewById(R.id.btnSalvarTimeout);
         EditText edtNovoTimeout = findViewById(R.id.edtNovoTimeout);
-        Intent serviceIntent = new Intent(this, BluetoothService.class);
+        Intent serviceIntent = new Intent(this, BluetoothServiceIndustrial.class);
         //startService(serviceIntent);
         // Liga-se ao serviço
         bindService(serviceIntent, mServiceConnection, Context.BIND_AUTO_CREATE);
