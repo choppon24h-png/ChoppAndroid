@@ -50,15 +50,15 @@ import okhttp3.Response;
  * FLUXO COM FILA DE COMANDOS BLE (v2.3)
  * ═══════════════════════════════════════════════════════════════════
  *
- *   1. Activity inicia → bind no BluetoothService
- *   2. BluetoothService conecta GATT → AUTH:OK → READY → ACTION_WRITE_READY
+ *   1. Activity inicia → bind no BluetoothServiceIndustrial
+ *   2. BluetoothServiceIndustrial conecta GATT → AUTH:OK → READY → ACTION_WRITE_READY
  *   3. PagamentoConcluido recebe WRITE_READY → chama start_sale.php
  *   4. Após start_sale OK → enfileira BleCommand SERVE via CommandQueueManager
  *   5. CommandQueueManager envia $ML:<N>:<cmdId> → aguarda ML:ACK (10s)
- *   6. ESP32 responde ML:ACK → BluetoothService roteia para CommandQueueManager
+ *   6. ESP32 responde ML:ACK → BluetoothServiceIndustrial roteia para CommandQueueManager
  *   7. CommandQueueManager aguarda DONE (60s)
- *   8. ESP32 envia DONE → BluetoothService roteia → CommandQueueManager.onDone()
- *   9. BluetoothService emite QUEUE:DONE:<cmdId>:<ml> via broadcast
+ *   8. ESP32 envia DONE → BluetoothServiceIndustrial roteia → CommandQueueManager.onDone()
+ *   9. BluetoothServiceIndustrial emite QUEUE:DONE:<cmdId>:<ml> via broadcast
  *  10. PagamentoConcluido recebe QUEUE:DONE → chama finish_sale.php → navega Home
  *
  * Em caso de falha (timeout ACK, timeout DONE, ERROR:BUSY):
@@ -163,7 +163,7 @@ public class PagamentoConcluido extends AppCompatActivity {
     };
 
     // ═════════════════════════════════════════════════════════════════════════
-    // BroadcastReceiver — mensagens do BluetoothService
+    // BroadcastReceiver — mensagens do BluetoothServiceIndustrial
     // ═════════════════════════════════════════════════════════════════════════
 
     private final BroadcastReceiver mServiceUpdateReceiver = new BroadcastReceiver() {
@@ -203,7 +203,7 @@ public class PagamentoConcluido extends AppCompatActivity {
                         Log.w(TAG, "[BLE] Dispositivo DESCONECTADO durante liberação");
                         atualizarStatus("🔄 Reconectando ao dispositivo...");
                         cancelarWatchdog();
-                        // CommandQueueManager.onBleDisconnected() já foi chamado pelo BluetoothService
+                        // CommandQueueManager.onBleDisconnected() já foi chamado pelo BluetoothServiceIndustrial
                         runOnUiThread(() -> {
                             if (liberado > 0 && liberado < qtd_ml && !mLiberacaoFinalizada) {
                                 int restante = qtd_ml - liberado;
@@ -570,7 +570,7 @@ public class PagamentoConcluido extends AppCompatActivity {
      */
     private void enfileirarComandoServe(int volumeMl) {
         if (mBluetoothService == null) {
-            Log.e(TAG, "[QUEUE] enfileirarComandoServe() — BluetoothService nulo!");
+            Log.e(TAG, "[QUEUE] enfileirarComandoServe() — BluetoothServiceIndustrial nulo!");
             return;
         }
 
@@ -740,8 +740,8 @@ public class PagamentoConcluido extends AppCompatActivity {
         // FIX-4: carregar imagem — tenta banco local primeiro, depois URL
         carregarImagemComFallback();
 
-        // Inicia e vincula o BluetoothService
-        Log.i(TAG, "[BLE] Iniciando BluetoothService...");
+        // Inicia e vincula o BluetoothServiceIndustrial
+        Log.i(TAG, "[BLE] Iniciando BluetoothServiceIndustrial...");
         Intent serviceIntent = new Intent(this, BluetoothServiceIndustrial.class);
         startService(serviceIntent);
         bindService(serviceIntent, mServiceConnection, Context.BIND_AUTO_CREATE);

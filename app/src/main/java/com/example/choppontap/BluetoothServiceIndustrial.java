@@ -235,6 +235,15 @@ public class BluetoothServiceIndustrial extends Service {
     public static final String EXTRA_STATUS    = "com.example.choppontap.EXTRA_STATUS";
     public static final String EXTRA_DEVICE    = "com.example.choppontap.EXTRA_DEVICE";
     public static final String EXTRA_BLE_STATE = "com.example.choppontap.EXTRA_BLE_STATE";
+    // ── Constantes de compatibilidade com ConnectedThread (legado BluetoothService) ──
+    /** @deprecated Use apenas internamente pelo ConnectedThread legado. */
+    public static final int MESSAGE_READ            = 0;
+    /** @deprecated Use apenas internamente pelo ConnectedThread legado. */
+    public static final int MESSAGE_WRITE           = 1;
+    /** @deprecated Use apenas internamente pelo ConnectedThread legado. */
+    public static final int MESSAGE_CONNECTION_LOST = 2;
+
+
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Códigos de status GATT (anti-bug Android)

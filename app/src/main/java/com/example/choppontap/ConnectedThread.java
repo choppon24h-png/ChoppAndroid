@@ -14,7 +14,7 @@ public class ConnectedThread extends Thread {
     private final Handler mmHandler;
     private byte[] mmBuffer;
 
-    // Use as constantes do BluetoothService para manter tudo centralizado
+    // Use as constantes do BluetoothServiceIndustrial para manter tudo centralizado
     public ConnectedThread(BluetoothSocket socket, Handler handler) {
         mmSocket = socket;
         mmHandler = handler;
@@ -26,7 +26,7 @@ public class ConnectedThread extends Thread {
             tmpOut = socket.getOutputStream();
         } catch (IOException e) {
             // Se falhar aqui, a conexão é inútil. Notifique o Handler.
-            mmHandler.obtainMessage(BluetoothService.MESSAGE_CONNECTION_LOST).sendToTarget();
+            mmHandler.obtainMessage(BluetoothServiceIndustrial.MESSAGE_CONNECTION_LOST).sendToTarget();
         }
 
         mmInStream = tmpIn;
@@ -42,11 +42,11 @@ public class ConnectedThread extends Thread {
                 numBytes = mmInStream.read(mmBuffer);
                 // Envia os dados lidos de volta para o Service
                 Message readMsg = mmHandler.obtainMessage(
-                        BluetoothService.MESSAGE_READ, numBytes, -1, mmBuffer);
+                        BluetoothServiceIndustrial.MESSAGE_READ, numBytes, -1, mmBuffer);
                 readMsg.sendToTarget();
             } catch (IOException e) {
                 // Conexão perdida! Notifica o Service.
-                mmHandler.obtainMessage(BluetoothService.MESSAGE_CONNECTION_LOST).sendToTarget();
+                mmHandler.obtainMessage(BluetoothServiceIndustrial.MESSAGE_CONNECTION_LOST).sendToTarget();
                 break;
             }
         }
@@ -57,7 +57,7 @@ public class ConnectedThread extends Thread {
             mmOutStream.write(bytes);
             // Notifica o Service sobre o que foi escrito
             Message writtenMsg = mmHandler.obtainMessage(
-                    BluetoothService.MESSAGE_WRITE, -1, -1, bytes);
+                    BluetoothServiceIndustrial.MESSAGE_WRITE, -1, -1, bytes);
             writtenMsg.sendToTarget();
         } catch (IOException e) {
             // Erro ao escrever, pode indicar que a conexão foi perdida.

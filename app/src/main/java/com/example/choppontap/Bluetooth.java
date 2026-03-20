@@ -63,7 +63,7 @@ public class Bluetooth extends BleManager {
                     // Este bloco é executado toda vez que o dispositivo envia dados.
                     String textoRecebido = data.getStringValue(0);
                     Log.d(TAG, "Dados recebidos: " + textoRecebido);
-                    // Atualiza o LiveData, que notificará o BluetoothService.
+                    // Atualiza o LiveData, que notificará o BluetoothServiceIndustrial.
                     if(textoRecebido.contains("VP") || textoRecebido.contains("ML") || textoRecebido.contains("PL") || textoRecebido.contains("OK") || textoRecebido.contains("ERRO"))
                     {
                         dadosRecebidos.postValue(textoRecebido);

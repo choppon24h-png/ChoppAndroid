@@ -120,7 +120,7 @@ public class ServiceTools extends AppCompatActivity {
         public void onServiceConnected(ComponentName name, IBinder service) {
             mBluetoothService = ((BluetoothServiceIndustrial.LocalBinder) service).getService();
             mIsServiceBound = true;
-            Log.i(TAG, "BluetoothService vinculado ao ServiceTools");
+            Log.i(TAG, "BluetoothServiceIndustrial vinculado ao ServiceTools");
             runOnUiThread(() -> {
                 boolean conectado = mBluetoothService.connected();
                 txtInfoBluetooth.setText("Bluetooth: " + (conectado ? "Conectado ao ESP32" : "Desconectado"));
@@ -133,7 +133,7 @@ public class ServiceTools extends AppCompatActivity {
         public void onServiceDisconnected(ComponentName name) {
             mIsServiceBound = false;
             mBluetoothService = null;
-            Log.w(TAG, "BluetoothService desvinculado");
+            Log.w(TAG, "BluetoothServiceIndustrial desvinculado");
         }
     };
 
@@ -188,7 +188,7 @@ public class ServiceTools extends AppCompatActivity {
         loadReaderStatus();
         sincronizarEstadoTap();
 
-        // ── Vincula o BluetoothService ────────────────────────────────────────
+        // ── Vincula o BluetoothServiceIndustrial ────────────────────────────────────────
         bindService(new Intent(this, BluetoothServiceIndustrial.class), mServiceConnection, Context.BIND_AUTO_CREATE);
 
         // ── Listeners ─────────────────────────────────────────────────────────
@@ -709,7 +709,7 @@ public class ServiceTools extends AppCompatActivity {
             Log.i(TAG, "Desconectando Bluetooth (TAP desativada)");
             mBluetoothService.disconnect();
         } else {
-            Log.w(TAG, "BluetoothService não vinculado — não foi possível desconectar");
+            Log.w(TAG, "BluetoothServiceIndustrial não vinculado — não foi possível desconectar");
         }
     }
 
@@ -721,7 +721,7 @@ public class ServiceTools extends AppCompatActivity {
             Log.i(TAG, "Iniciando reconexão Bluetooth (TAP ativada)");
             mBluetoothService.scanLeDevice(true);
         } else {
-            Log.w(TAG, "BluetoothService não vinculado — Home fará a reconexão no onCreate()");
+            Log.w(TAG, "BluetoothServiceIndustrial não vinculado — Home fará a reconexão no onCreate()");
         }
     }
 
@@ -730,7 +730,7 @@ public class ServiceTools extends AppCompatActivity {
     // ─────────────────────────────────────────────────────────────────────────────
     /**
      * Carrega as informações do dispositivo BLE (ESP32) salvas no SharedPreferences.
-     * O MAC é gravado em "tap_config" → "esp32_mac" pelo BluetoothService ao conectar.
+     * O MAC é gravado em "tap_config" → "esp32_mac" pelo BluetoothServiceIndustrial ao conectar.
      * O nome do dispositivo é o prefixo "CHOPP_" seguido do identificador do ESP32.
      * Exibe o Android ID do tablet para facilitar o cadastro na API web.
      */
@@ -753,7 +753,7 @@ public class ServiceTools extends AppCompatActivity {
             txtBleAndroidId.setText(android_id);
         }
 
-        // Status inicial (será atualizado quando o BluetoothService conectar)
+        // Status inicial (será atualizado quando o BluetoothServiceIndustrial conectar)
         if (txtBleStatus != null) {
             txtBleStatus.setText("● AGUARDANDO...");
             txtBleStatus.setTextColor(android.graphics.Color.parseColor("#888888"));
@@ -784,7 +784,7 @@ public class ServiceTools extends AppCompatActivity {
     }
 
     /**
-     * Atualiza o indicador de status BLE no card após o BluetoothService conectar.
+     * Atualiza o indicador de status BLE no card após o BluetoothServiceIndustrial conectar.
      * Chamado pelo onServiceConnected quando o status real do GATT é conhecido.
      */
     private void atualizarStatusBle(boolean conectado) {

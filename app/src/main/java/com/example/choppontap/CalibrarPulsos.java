@@ -50,7 +50,7 @@ public class CalibrarPulsos extends AppCompatActivity {
     Button btnLiberacaoContinua;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // BroadcastReceiver: recebe eventos do BluetoothService
+    // BroadcastReceiver: recebe eventos do BluetoothServiceIndustrial
     // ─────────────────────────────────────────────────────────────────────────
     private final BroadcastReceiver mServiceUpdateReceiver = new BroadcastReceiver() {
         @Override
@@ -121,7 +121,7 @@ public class CalibrarPulsos extends AppCompatActivity {
     };
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ServiceConnection: vincula ao BluetoothService
+    // ServiceConnection: vincula ao BluetoothServiceIndustrial
     // ─────────────────────────────────────────────────────────────────────────
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
         @Override
@@ -129,7 +129,7 @@ public class CalibrarPulsos extends AppCompatActivity {
             BluetoothServiceIndustrial.LocalBinder binder = (BluetoothServiceIndustrial.LocalBinder) service;
             mBluetoothService = binder.getService();
             mIsServiceBound = true;
-            Log.d(TAG, "BluetoothService vinculado. Conectado: " + mBluetoothService.connected());
+            Log.d(TAG, "BluetoothServiceIndustrial vinculado. Conectado: " + mBluetoothService.connected());
 
             if (mBluetoothService.connected()) {
                 changeButtons(true);
@@ -142,7 +142,7 @@ public class CalibrarPulsos extends AppCompatActivity {
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
-            Log.w(TAG, "BluetoothService desvinculado");
+            Log.w(TAG, "BluetoothServiceIndustrial desvinculado");
             mIsServiceBound = false;
         }
     };
@@ -177,7 +177,7 @@ public class CalibrarPulsos extends AppCompatActivity {
         // Desabilita botões até BLE conectar
         changeButtons(false);
 
-        // Vincula ao BluetoothService
+        // Vincula ao BluetoothServiceIndustrial
         Intent serviceIntent = new Intent(this, BluetoothServiceIndustrial.class);
         bindService(serviceIntent, mServiceConnection, Context.BIND_AUTO_CREATE);
 

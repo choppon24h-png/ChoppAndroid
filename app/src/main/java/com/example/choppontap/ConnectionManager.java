@@ -161,7 +161,7 @@ public class ConnectionManager {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // API pública — eventos de scan (chamados pelo BluetoothService)
+    // API pública — eventos de scan (chamados pelo BluetoothServiceIndustrial)
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
@@ -208,7 +208,7 @@ public class ConnectionManager {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // API pública — eventos GATT (chamados pelo BluetoothService)
+    // API pública — eventos GATT (chamados pelo BluetoothServiceIndustrial)
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
@@ -286,7 +286,7 @@ public class ConnectionManager {
     }
 
     /**
-     * Para tudo — chamado no onDestroy() do BluetoothService.
+     * Para tudo — chamado no onDestroy() do BluetoothServiceIndustrial.
      */
     public synchronized void destroy() {
         Log.i(TAG, "[CONN] destroy()");

@@ -67,7 +67,7 @@ public class CommandQueueManager {
 
     private Callback mCallback;
 
-    // ── Interface de envio BLE (injetada pelo BluetoothService) ──────────────
+    // ── Interface de envio BLE (injetada pelo BluetoothServiceIndustrial) ──────────────
     public interface BleWriter {
         /** Envia a string via BLE. Retorna true se enviado com sucesso. */
         boolean write(String data);
@@ -113,7 +113,7 @@ public class CommandQueueManager {
 
     /**
      * Processa a resposta BLE recebida do ESP32.
-     * Deve ser chamado pelo BluetoothService em onCharacteristicChanged().
+     * Deve ser chamado pelo BluetoothServiceIndustrial em onCharacteristicChanged().
      *
      * Formatos tratados:
      *   ACK|<id>
@@ -209,7 +209,7 @@ public class CommandQueueManager {
     }
 
     /**
-     * Chamado pelo BluetoothService quando o BLE desconecta.
+     * Chamado pelo BluetoothServiceIndustrial quando o BLE desconecta.
      * Pausa a fila — o comando ativo permanece para reenvio após reconexão.
      */
     public synchronized void onBleDisconnected() {
@@ -224,7 +224,7 @@ public class CommandQueueManager {
     }
 
     /**
-     * Chamado pelo BluetoothService quando o BLE reconecta e está READY.
+     * Chamado pelo BluetoothServiceIndustrial quando o BLE reconecta e está READY.
      * Retoma a fila — reenvio do comando ativo com mesmo ID.
      */
     public synchronized void onBleReady() {

@@ -95,7 +95,7 @@ public class Home extends AppCompatActivity {
     private boolean mIsServiceBound = false;
 
     /**
-     * BroadcastReceiver que recebe atualizações de status do BluetoothService.
+     * BroadcastReceiver que recebe atualizações de status do BluetoothServiceIndustrial.
      * Registrado em onResume() e desregistrado em onPause() para evitar leaks.
      */
     private final BroadcastReceiver mServiceUpdateReceiver = new BroadcastReceiver() {
@@ -114,12 +114,12 @@ public class Home extends AppCompatActivity {
     };
 
     /**
-     * ServiceConnection do BluetoothService.
+     * ServiceConnection do BluetoothServiceIndustrial.
      *
      * PROBLEMA IDENTIFICADO (BLE preso em "conectando..."):
      *   Quando o ServiceTools chama disconnect() → mAutoReconnect = false.
      *   Depois, ao ativar a TAP, o ServiceTools chama scanLeDevice(true) antes
-     *   de navegar para a Home. Porém, o BluetoothService é um Service singleton
+     *   de navegar para a Home. Porém, o BluetoothServiceIndustrial é um Service singleton
      *   — o mesmo objeto é reusado. Quando a Home faz bindService(), o
      *   onServiceConnected() é chamado, mas mAutoReconnect ainda está false
      *   (foi setado pelo disconnect() anterior). Resultado: o scan inicia,
@@ -134,7 +134,7 @@ public class Home extends AppCompatActivity {
         public void onServiceConnected(ComponentName name, IBinder service) {
             mBluetoothService = ((BluetoothServiceIndustrial.LocalBinder) service).getService();
             mIsServiceBound = true;
-            Log.i(TAG, "BluetoothService vinculado. Estado atual: "
+            Log.i(TAG, "BluetoothServiceIndustrial vinculado. Estado atual: "
                     + (mBluetoothService.connected() ? "CONECTADO" : "DESCONECTADO"));
 
             // CORREÇÃO CRÍTICA: reabilita o auto-reconnect que foi desativado pelo
@@ -154,7 +154,7 @@ public class Home extends AppCompatActivity {
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
-            Log.w(TAG, "BluetoothService desvinculado inesperadamente");
+            Log.w(TAG, "BluetoothServiceIndustrial desvinculado inesperadamente");
             mIsServiceBound = false;
             mBluetoothService = null;
             changeButtons(false);
@@ -195,7 +195,7 @@ public class Home extends AppCompatActivity {
             sendRequestCheckSecurity();
         }
 
-        // Vincula o BluetoothService — onServiceConnected() dispara o scan
+        // Vincula o BluetoothServiceIndustrial — onServiceConnected() dispara o scan
         bindBluetoothService();
     }
 
@@ -657,7 +657,7 @@ public class Home extends AppCompatActivity {
         // FIX: BackgroundServiceStartNotAllowedException (Android 12+)
         // O sistema Android 12+ não permite startService() quando o app está em background.
         // Usar startForegroundService() garante que o serviço BLE inicie mesmo nessa situação.
-        // O BluetoothService deve chamar startForeground() dentro de 5s após iniciar.
+        // O BluetoothServiceIndustrial deve chamar startForeground() dentro de 5s após iniciar.
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent);
         } else {

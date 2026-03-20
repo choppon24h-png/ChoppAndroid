@@ -9,7 +9,7 @@ import android.util.Log;
  * ARQUITETURA
  * ═══════════════════════════════════════════════════════════════════
  *
- *   BluetoothService
+ *   BluetoothServiceIndustrial
  *        │
  *        ▼
  *   BleManager  ◄──── PagamentoConcluido (via getCommandQueue)
@@ -26,7 +26,7 @@ import android.util.Log;
  *   - Roteia mensagens para os módulos corretos
  *   - Coordena reconexão, heartbeat e fila de comandos
  *   - Envia STATUS ao ESP32 após reconexão para sincronizar estado
- *   - Expõe API unificada para BluetoothService e Activities
+ *   - Expõe API unificada para BluetoothServiceIndustrial e Activities
  *
  * ═══════════════════════════════════════════════════════════════════
  * LOGS INDUSTRIAIS
@@ -45,10 +45,10 @@ public class BleManager {
     private final ConnectionManager mConnectionManager;
     private final CommandQueue       mCommandQueue;
 
-    // ── Interface de escrita BLE (injetada pelo BluetoothService) ─────────────
+    // ── Interface de escrita BLE (injetada pelo BluetoothServiceIndustrial) ─────────────
     private CommandQueue.BleWriter mWriter;
 
-    // ── Callbacks para o BluetoothService ─────────────────────────────────────
+    // ── Callbacks para o BluetoothServiceIndustrial ─────────────────────────────────────
     public interface Callback {
         /** BLE transitou para um novo estado */
         void onStateChanged(ConnectionManager.State newState, ConnectionManager.State oldState);
@@ -177,7 +177,7 @@ public class BleManager {
     // Configuração
     // ═════════════════════════════════════════════════════════════════════════
 
-    /** Injeta o BleWriter (deve ser chamado pelo BluetoothService após inicialização). */
+    /** Injeta o BleWriter (deve ser chamado pelo BluetoothServiceIndustrial após inicialização). */
     public void setWriter(CommandQueue.BleWriter writer) {
         this.mWriter = writer;
     }
@@ -193,7 +193,7 @@ public class BleManager {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Eventos de scan (chamados pelo BluetoothService)
+    // Eventos de scan (chamados pelo BluetoothServiceIndustrial)
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
@@ -217,7 +217,7 @@ public class BleManager {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Eventos GATT (chamados pelo BluetoothService)
+    // Eventos GATT (chamados pelo BluetoothServiceIndustrial)
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
@@ -317,7 +317,7 @@ public class BleManager {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // API para Activities e BluetoothService
+    // API para Activities e BluetoothServiceIndustrial
     // ═════════════════════════════════════════════════════════════════════════
 
     /** Retorna o estado de conexão atual. */
@@ -340,13 +340,13 @@ public class BleManager {
         return mCommandQueue;
     }
 
-    /** Retorna o ConnectionManager para uso pelo BluetoothService. */
+    /** Retorna o ConnectionManager para uso pelo BluetoothServiceIndustrial. */
     public ConnectionManager getConnectionManager() {
         return mConnectionManager;
     }
 
     /**
-     * Para tudo — chamado no onDestroy() do BluetoothService.
+     * Para tudo — chamado no onDestroy() do BluetoothServiceIndustrial.
      */
     public void destroy() {
         mConnectionManager.destroy();

@@ -127,7 +127,7 @@ public class CommandQueue {
 
     /**
      * Processa resposta BLE recebida do ESP32.
-     * Deve ser chamado pelo BluetoothService em onCharacteristicChanged().
+     * Deve ser chamado pelo BluetoothServiceIndustrial em onCharacteristicChanged().
      */
     public synchronized void onBleResponse(BleParser.ParsedMessage msg) {
         if (msg == null) return;

@@ -105,20 +105,21 @@
             android:screenOrientation="reversePortrait"
             android:theme="@style/Theme.ChoppOnTap" />
 
-        <!-- FIX: foregroundServiceType="connectedDevice" obrigatório no Android 14+
-             para serviços que gerenciam conexões Bluetooth -->
+        <!-- SERVIÇO ATIVO: BluetoothServiceIndustrial — implementação industrial para ESP32 BLE.
+             Único serviço BLE ativo no projeto. Todas as Activities fazem bind neste serviço.
+             Protocolo: SERVE|<ml>|ID=<id>|SESSION=<session> | AUTH: $AUTH:259087 -->
         <service
-            android:name=".BluetoothService"
+            android:name=".BluetoothServiceIndustrial"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
-        <!-- MUDANÇA 1: BluetoothServiceIndustrial — implementação industrial para ESP32 BLE.
-             Substitui BluetoothService em todas as Activities como drop-in replacement.
-             BluetoothService permanece declarado para compatibilidade com ConnectedThread. -->
+        <!-- SERVIÇO LEGADO (BACKUP): BluetoothServiceOLD — NÃO usar em novas features.
+             Mantido apenas como referência histórica. Nenhuma Activity faz bind neste serviço.
+             Desabilitado (android:enabled="false") para evitar uso acidental. -->
         <service
-            android:name=".BluetoothServiceIndustrial"
-            android:enabled="true"
+            android:name=".BluetoothServiceOLD"
+            android:enabled="false"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
